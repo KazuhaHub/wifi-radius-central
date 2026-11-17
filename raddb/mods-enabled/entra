@@ -1,0 +1,35 @@
+# Password check against Microsoft Entra ID, through the entra-forward-auth service (a separate container).
+#
+#   GET $ENV{ENTRA_AUTH_URL}   with HTTP Basic user:password
+#   204 -> ok (Access-Accept)    401 -> reject (wrong password, unknown user, disallowed domain, banned)
+#   503, any other status, no answer, timeout -> fail (the client gets Access-Reject, never an accept)
+#
+# ENTRA_AUTH_URL is validated and defaulted (http://127.0.0.1:5002/auth) by the entrypoint.
+# entra-forward-auth waits up to 8 s for Entra itself, so the request timeout here is longer than that.
+# The password is sent only on the loopback connection to that service and is never logged
+# (the authentication log has auth_badpass and auth_goodpass off).
+rest entra {
+	connect_uri = "$ENV{ENTRA_AUTH_URL}"
+	connect_timeout = 2
+
+	authenticate {
+		uri = "$ENV{ENTRA_AUTH_URL}"
+		method = 'get'
+		auth = 'basic'
+		username = "%{User-Name}"
+		password = "%{User-Password}"
+		timeout = 12
+	}
+
+	# A few connections are enough: a login waits for Entra, and the Wi-Fi login rate is low.
+	pool {
+		start = 1
+		min = 1
+		max = 8
+		spare = 2
+		uses = 0
+		retry_delay = 5
+		lifetime = 0
+		idle_timeout = 60
+	}
+}

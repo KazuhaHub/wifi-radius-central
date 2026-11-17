@@ -1,0 +1,62 @@
+#!/bin/bash
+# Manage the accounts of the certificate service (cert-dist): one account per site host, and one for the
+# backup central node. PRIMARY host only. The accounts file is dist/htpasswd (apr1 hashes only).
+#
+#   cert-account list            list the account names
+#   cert-account add   HOST      create HOST's account; prints its new random password once
+#   cert-account reset HOST      give HOST a new random password (the old one stops working at once)
+#   cert-account del   HOST      delete HOST's account (that host can no longer pull certificates)
+#
+# HOST is a name of 1-64 characters from a-z, 0-9 and '-' (e.g. the host name). It goes into the site's
+# settings as CERT_SYNC_USER, with the printed password as CERT_SYNC_PASSWORD.
+# The password is printed once and stored nowhere here; if it is lost, reset it.
+# Changes take effect at once on the primary (nginx reads the file per request); the backup central node
+# pulls the file within CERT_SYNC_INTERVAL (10 minutes). The file is rewritten in place (same inode): never
+# replace it with sed -i, mv or an editor that does, because anything that has it mounted would keep the old one.
+# This script lives in host/ of the deployment folder (the one with compose.yaml); it finds that folder from its own location.
+set -euo pipefail
+BASE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)   # the deployment folder
+F=$BASE/dist/htpasswd
+BK=$BASE/backups/cert-accounts
+# The backup central node's own account (CERT_DIST_BACKUP_USER in .env): the only one that may fetch the file itself.
+RESERVED=$(grep -m1 '^CERT_DIST_BACKUP_USER=' "$BASE/.env" 2>/dev/null | cut -d= -f2- || true)
+
+usage() { sed -n '5,8p' "$0" | sed 's/^# *//' >&2; exit 2; }
+die() { echo "cert-account: $*" >&2; exit 1; }
+
+check_name() {
+  [[ $1 =~ ^[a-z0-9-]{1,64}$ ]] || die "'$1' is not a valid account name (a-z, 0-9, '-', at most 64)"
+}
+has() { grep -q "^$1:" "$F"; }
+
+write() {  # new content on stdin -> $F, in place, with a backup of the old content
+  local new; new=$(mktemp); cat > "$new"
+  mkdir -p "$BK"; chmod 700 "$BK"
+  cp -p "$F" "$BK/htpasswd.$(date +%Y%m%d-%H%M%S)"
+  cat "$new" > "$F"; rm -f "$new"
+  logger -t cert-account "$*"
+}
+
+newpass() {  # host: replace or add the host's line, print the password
+  local p; p=$(openssl rand -hex 16)
+  { grep -v "^$1:" "$F" || true; printf '%s:%s\n' "$1" "$(openssl passwd -apr1 "$p")"; } | write "$2 $1"
+  printf 'account:  %s\npassword: %s\n(shown only this once; put it in the site settings as CERT_SYNC_USER / CERT_SYNC_PASSWORD)\n' "$1" "$p"
+}
+
+case "${1:-}" in
+  list|add|reset|del) ;;
+  *) usage ;;
+esac
+if [ ! -f "$F" ]; then   # first use: the file (and dist/) is created for the cert-dist container to read (gid 101 = nginx)
+  [ "$1" = add ] || die "$F not found"
+  install -d -m 750 -o root -g 101 "$BASE/dist"
+  install -m 640 -o root -g 101 /dev/null "$F"
+fi
+case "$1" in
+  list)  cut -d: -f1 "$F" ;;
+  add)   [ $# -eq 2 ] || usage; check_name "$2"; has "$2" && die "'$2' already exists (use reset for a new password)"; newpass "$2" added ;;
+  reset) [ $# -eq 2 ] || usage; has "$2" || die "no account '$2'"; newpass "$2" reset ;;
+  del)   [ $# -eq 2 ] || usage; has "$2" || die "no account '$2'"
+         [ -n "$RESERVED" ] && [ "$2" = "$RESERVED" ] && echo "cert-account: warning: this is the backup central node's own account; it can no longer sync" >&2
+         { grep -v "^$2:" "$F" || true; } | write "deleted $2"; echo "deleted $2" ;;
+esac

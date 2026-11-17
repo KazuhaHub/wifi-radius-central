@@ -1,0 +1,77 @@
+# Wi-Fi RADIUS central server. The same file for the primary and the backup; what differs is .env.
+#
+#   freeradius  checks the password of each login against Microsoft Entra ID (through entra-auth)
+#   entra-auth  the entra-forward-auth service: HTTP Basic user:password in, 204 / 401 / 503 out (loopback only)
+#   cert-dist   serves the certificate set to the sites over the private network, per-site Basic auth
+#
+# All three use host networking, on purpose: RADIUS clients are identified by source IP, which Docker's
+# port publishing would rewrite; and the services bind the host's private-network address.
+# Roles: with CERT_SYNC_URL in .env this host is the BACKUP (it pulls the certificate set and the site
+# accounts from the primary and serves them from the cert-dist volume); without it, the PRIMARY (the set
+# is read from ./certs, the accounts file is ./dist/htpasswd). See .env.example and README.md.
+# Update: `docker compose pull && docker compose up -d`.
+name: wifi-radius-central
+
+services:
+  freeradius:
+    image: ghcr.io/kazuhahub/wifi-radius-central:latest
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      # Primary: the certificate set (server.pem, server.key, ca.pem). Backup: not used (leave it empty).
+      - ./certs:/certs:ro
+      # Backup: verified certificate sets (current and previous), kept across restarts and outages.
+      - cert-cache:/var/lib/cert-sync
+      # What cert-dist serves. Primary: ./dist (default; host/publish-site-certs and host/cert-account write it).
+      # Backup: the named volume cert-dist (set CERT_DIST_DIR=cert-dist in .env); the container writes it.
+      - ${CERT_DIST_DIR:-./dist}:/srv/cert-dist
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  entra-auth:
+    image: ghcr.io/kazuhahub/entra-forward-auth:latest
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:?set ENTRA_TENANT_ID in .env}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:?set ENTRA_CLIENT_ID in .env}
+      ENTRA_SCOPE: ${ENTRA_SCOPE:?set ENTRA_SCOPE in .env}
+      ENTRA_ALLOWED_DOMAINS: ${ENTRA_ALLOWED_DOMAINS:?set ENTRA_ALLOWED_DOMAINS in .env}
+      ENTRA_CLIENT_CERT: /run/entra-cred/client.pem
+      ENTRA_CLIENT_KEY: /run/entra-cred/client.key
+      # Only FreeRADIUS on this host talks to it. Every request comes from 127.0.0.1, so a ban per client
+      # IP would lock out every login at once: only per-user bans are wanted.
+      LISTEN: 127.0.0.1:5002
+      FAIL_LIMIT_IP: "0"
+      # Empty: use the peer address, instead of warning every minute about a missing X-Real-IP header.
+      CLIENT_IP_HEADER: ""
+    volumes:
+      # The app certificate credential. The key must be readable by UID 65532: chown 65532 entra-cred/client.key
+      - ./entra-cred:/run/entra-cred:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  cert-dist:
+    image: nginx:alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CERT_DIST_LISTEN: ${CERT_DIST_LISTEN:?set CERT_DIST_LISTEN in .env}
+      CERT_DIST_BACKUP_USER: ${CERT_DIST_BACKUP_USER:-}
+    volumes:
+      - ${CERT_DIST_DIR:-./dist}:/srv/cert-dist:ro
+      # nginx fills in the two variables above at start (it processes /etc/nginx/templates).
+      - ./cert-dist/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  cert-cache:
+  cert-dist:

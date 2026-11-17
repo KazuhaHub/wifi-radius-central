@@ -1,0 +1,44 @@
+# Central Wi-Fi RADIUS: the outer (real) server.
+#  - plain PAP from the site proxies (they terminate EAP-TTLS locally and forward only the inner request)
+#  - EAP-TTLS directly (an AP pointed here, or tests); its inner PAP is checked in "inner-tunnel"
+# Both end in the `entra` module (see mods-enabled/entra).
+# The listen sections are generated at start from LISTEN_ADDRS / LISTEN_PORT; which hosts may talk to them
+# is decided by the generated clients.conf (SITE_CLIENTS, plus the local client 127.0.0.1); anything else is dropped.
+server default {
+	$INCLUDE /etc/freeradius/listen.conf
+
+	authorize {
+		# The Status-Server probes of the site proxies (they use them to detect a dead central server).
+		Autz-Type Status-Server {
+			ok
+		}
+		filter_username
+		eap {
+			ok = return
+		}
+		if (&User-Password) {
+			# Basic auth cannot carry a ':' in the user name, and an empty password is never valid.
+			if ((&User-Name =~ /:/) || (&User-Password == "")) {
+				reject
+			}
+			update control {
+				&Auth-Type := entra
+			}
+		}
+	}
+
+	authenticate {
+		eap
+		Auth-Type entra {
+			entra
+		}
+	}
+
+	post-auth {
+		Post-Auth-Type REJECT {
+			attr_filter.access_reject
+			eap
+			remove_reply_message_if_eap
+		}
+	}
+}

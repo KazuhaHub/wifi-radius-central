@@ -1,0 +1,30 @@
+# Certificate service of a central host: serves the current RADIUS certificate set to the sites over
+# the private network, with one Basic-auth account per site (apr1 hashes in /srv/cert-dist/htpasswd:
+# add a line to add a site, delete it to cut one off; nginx re-reads the file on every request).
+# The nginx image fills in ${CERT_DIST_LISTEN} and ${CERT_DIST_BACKUP_USER} from the environment at start
+# (templates in /etc/nginx/templates); every other $variable here is an nginx variable and is left alone.
+#
+# CERT_DIST_LISTEN       IPv4:port to listen on (the private-network address; never a public one)
+# CERT_DIST_BACKUP_USER  primary: the one account that may also fetch /htpasswd (the backup node's own)
+#                        backup: leave empty; /htpasswd then answers 403 to everybody
+server {
+    listen ${CERT_DIST_LISTEN};
+    auth_basic "cert-dist";
+    auth_basic_user_file /srv/cert-dist/htpasswd;
+    root /srv/cert-dist;
+    autoindex off;
+    server_tokens off;
+    location ~ ^/(SHA256SUMS|server\.pem|server\.key|ca\.pem)$ {
+        default_type text/plain;
+        add_header Cache-Control no-store;
+    }
+    # The account file itself, for the backup central node only: it pulls it to run its own copy of this
+    # service. The file holds apr1 hashes, not passwords. With an empty CERT_DIST_BACKUP_USER nobody matches.
+    location = /htpasswd {
+        if ($remote_user != "${CERT_DIST_BACKUP_USER}") { return 403; }
+        alias /srv/cert-dist/htpasswd;
+        default_type text/plain;
+        add_header Cache-Control no-store;
+    }
+    location / { return 404; }
+}

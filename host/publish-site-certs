@@ -1,0 +1,19 @@
+#!/bin/sh
+# Publish the current RADIUS cert set (certs/server.pem, server.key, ca.pem) into dist/, which the
+# cert-dist container serves to the sites over the private network (see cert-dist/default.conf.template).
+# Each site pulls it periodically and restarts its FreeRADIUS when SHA256SUMS changes, so a renewal
+# or CA change only has to be done here. Run after any change in certs/ (renew-server-cert.sh does).
+# PRIMARY host only; this script lives in host/ of the deployment folder (the one with compose.yaml).
+set -eu
+BASE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)   # the deployment folder
+D=$BASE/dist; NAME=radius.kazuha.org
+install -d -m 750 -o root -g 101 "$D"    # gid 101 = nginx inside the cert-dist container
+for f in server.pem server.key ca.pem; do install -m 640 -o root -g 101 "$BASE/certs/$f" "$D/.$f.new"; done
+openssl verify -CAfile "$D/.ca.pem.new" "$D/.server.pem.new" >/dev/null
+openssl x509 -in "$D/.server.pem.new" -noout -ext subjectAltName | grep -q "DNS:$NAME"
+[ "$(openssl x509 -in "$D/.server.pem.new" -noout -pubkey | openssl sha256)" = \
+  "$(openssl pkey -in "$D/.server.key.new" -pubout | openssl sha256)" ]
+for f in server.pem server.key ca.pem; do mv -f "$D/.$f.new" "$D/$f"; done
+(cd "$D" && sha256sum server.pem server.key ca.pem > .SHA256SUMS.new)
+chown root:101 "$D/.SHA256SUMS.new"; chmod 640 "$D/.SHA256SUMS.new"; mv -f "$D/.SHA256SUMS.new" "$D/SHA256SUMS"
+logger -t publish-site-certs "published $(openssl x509 -in "$D/server.pem" -noout -enddate) CA $(openssl x509 -in "$D/ca.pem" -noout -enddate)"
