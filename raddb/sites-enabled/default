@@ -9,8 +9,16 @@ server default {
 
 	authorize {
 		# The Status-Server probes of the site proxies (they use them to detect a dead central server).
+		# Answered only while entra-auth is ready: a central server that cannot check passwords must look
+		# dead, so that the sites send their logins to the other one.
 		Autz-Type Status-Server {
-			ok
+			entra_ready
+			if (!(ok || updated)) {
+				do_not_respond
+			}
+			else {
+				ok
+			}
 		}
 		filter_username
 		eap {
@@ -29,8 +37,35 @@ server default {
 
 	authenticate {
 		eap
+		# 204 from entra-auth is the only accept. A failure of the service itself (no answer, timeout,
+		# connection refused, 5xx, no free connection) is NOT a reject: the request is dropped without a
+		# reply, so the site's home server times out and fails over to the other central server. Anything
+		# else (401, other 4xx, a 200 ...) is a reject.
+		# rlm_rest leaves "return" as the action for most results, which would end this group before the
+		# checks below; the actions are set to 1 (carry on) so that the decision is made here, from the
+		# HTTP status code alone (rlm_rest sets REST-HTTP-Status-Code when an answer arrived).
 		Auth-Type entra {
-			entra
+			entra {
+				ok = 1
+				fail = 1
+				reject = 1
+				invalid = 1
+				notfound = 1
+				userlock = 1
+			}
+			if (!&reply:REST-HTTP-Status-Code || (&reply:REST-HTTP-Status-Code >= 500)) {
+				# The shipped policy: Response-Packet-Type := Do-Not-Respond in the control list, then `handled`.
+				do_not_respond
+			}
+			elsif (&reply:REST-HTTP-Status-Code == 204) {
+				update reply {
+					&REST-HTTP-Status-Code !* ANY
+				}
+				ok
+			}
+			else {
+				reject
+			}
 		}
 	}
 

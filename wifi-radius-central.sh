@@ -21,13 +21,17 @@
 #      PRIMARY refuses to start on a set that fails. BACKUP caches accepted sets in /var/lib/cert-sync;
 #      the set that was replaced is kept in /var/lib/cert-sync/previous (if it is itself loadable),
 #      so a bad set can be rolled back.
-#   5. BACKUP only: publishes the current set (and the site accounts file pulled from the primary)
-#      into /srv/cert-dist, which the cert-dist container serves to the sites.
-#   6. Runs FreeRADIUS. BACKUP: if it dies right after start, it falls back to the previous set
-#      once, and says so loudly.
+#   5. Runs FreeRADIUS. BACKUP: if it dies right after start AND `freeradius -C` now refuses that set
+#      (so the certificate is plausibly the cause), it falls back to the previous set once, and says
+#      so loudly. Any other early death just exits non-zero and Docker restarts the container.
+#   6. BACKUP only: once FreeRADIUS has survived the grace period on the set, publishes that set (and
+#      the site accounts file pulled from the primary) into /srv/cert-dist, which the cert-dist
+#      container serves to the sites. A set that FreeRADIUS did not survive is never published.
 #   7. BACKUP only: re-checks every CERT_SYNC_INTERVAL seconds. A new valid set is cached and the
 #      container exits, so Docker restarts it on the new set. A changed site accounts file is only
-#      rewritten in /srv/cert-dist; FreeRADIUS is not restarted for it.
+#      rewritten in /srv/cert-dist (a temporary file, then mv); FreeRADIUS is not restarted for it.
+#      While running on previous/ (after a fall-back) it logs a WARNING at every check, and retries
+#      the current set every hour (exits when it has become usable, so Docker restarts it on it).
 #
 # Secrets: they are never written to a file and never logged. The two RADIUS secrets reach
 # FreeRADIUS only as environment variables ($ENV{...} in the generated config). The sync
@@ -160,14 +164,18 @@ fi
 LISTEN_PORT=${LISTEN_PORT:-11812}                 # UDP port of the RADIUS listeners
 INTERVAL=${CERT_SYNC_INTERVAL:-600}               # backup: seconds between checks of the primary (10 min)
 ENTRA_AUTH_URL=${ENTRA_AUTH_URL:-http://127.0.0.1:5002/auth}
+RETRY_CURRENT=${CERT_RETRY_CURRENT_INTERVAL:-3600}   # backup, running on previous/: how often the current set is tried again
 is_port "$LISTEN_PORT" || err "LISTEN_PORT must be a port 1-65535 (optional, default 11812)"
 [[ $INTERVAL =~ ^[1-9][0-9]{0,6}$ ]] || err "CERT_SYNC_INTERVAL must be a number of seconds (optional, default 600)"
+[[ $RETRY_CURRENT =~ ^[1-9][0-9]{0,6}$ ]] || err "CERT_RETRY_CURRENT_INTERVAL must be a number of seconds (optional, default 3600)"
 # (the two parts are taken out first: is_ipv4 and is_port run their own regex matches)
-if [[ $ENTRA_AUTH_URL =~ ^http://([0-9.]+):([0-9]+)(/[A-Za-z0-9._/-]*)$ ]]; then
-  _h=${BASH_REMATCH[1]}; _q=${BASH_REMATCH[2]}
+# Loopback only: the passwords of the logins travel on this connection, in clear.
+if [[ $ENTRA_AUTH_URL =~ ^http://(127(\.[0-9]+){3}):([0-9]+)(/[A-Za-z0-9._/-]*)$ ]]; then
+  _h=${BASH_REMATCH[1]}; _q=${BASH_REMATCH[3]}
   { is_ipv4 "$_h" && is_port "$_q"; } || _bad_url=1
 else _bad_url=1; fi
-[ -z "${_bad_url:-}" ] || err "ENTRA_AUTH_URL must be http://IPv4:port/path (optional, default http://127.0.0.1:5002/auth)"
+[ -z "${_bad_url:-}" ] || err "ENTRA_AUTH_URL must be http://127.x.x.x:port/path, a loopback address (optional, default http://127.0.0.1:5002/auth)"
+ENTRA_READY_URL=${ENTRA_AUTH_URL%/*}/readyz   # entra-auth's readiness endpoint, for Status-Server
 
 if [ -n "${LISTEN_ADDRS:-}" ]; then
   n_before=${#errors[@]}
@@ -188,6 +196,7 @@ if [ -n "${SITE_CLIENTS:-}" ]; then
     for item in "${_sc[@]}"; do
       msg=$(site_policy "$item") || err "SITE_CLIENTS: $item $msg"
     done
+    [ "$(printf '%s\n' "${_sc[@]}" | sort -u | wc -l)" = "${#_sc[@]}" ] || err "SITE_CLIENTS lists an entry twice"
   fi
 fi
 for v in RADIUS_SECRET_SITES RADIUS_SECRET_LOCAL; do
@@ -256,7 +265,7 @@ if [ "$CA_PIN" != "$BUILTIN_CA" ]; then
 fi
 IFS=, read -ra LISTEN_LIST <<< "$LISTEN_ADDRS"
 IFS=, read -ra SITE_LIST <<< "$SITE_CLIENTS"
-export LISTEN_PORT ENTRA_AUTH_URL
+export LISTEN_PORT ENTRA_AUTH_URL ENTRA_READY_URL
 RETRY=30    # seconds between attempts while no usable certificate set exists yet (backup)
 GRACE=5     # seconds FreeRADIUS must stay up after start before it counts as started
 NAME=radius.kazuha.org
@@ -341,18 +350,30 @@ gen_clients && gen_listen || { log "cannot write the generated configuration in 
 get() {
   exec 3<>"/dev/tcp/$SRC_HOST/$SRC_PORT" || return 1
   printf 'GET /%s HTTP/1.0\r\nHost: %s\r\nAuthorization: Basic %s\r\n\r\n' "$1" "$SRC_HOST" "$AUTH" >&3
-  local status line
+  local status line cl="" tmp n
   IFS= read -r status <&3 || return 1
   case "$status" in *" 200 "*) ;; *) echo "${status%$'\r'}" >&2; exec 3<&-; return 1 ;; esac
-  while IFS= read -r line <&3; do [ -z "${line%$'\r'}" ] && break; done
-  head -c 1048576 <&3     # a certificate file is a few KB; refuse to be filled up
+  while IFS= read -r line <&3; do
+    line=${line%$'\r'}
+    [ -z "$line" ] && break
+    case ${line,,} in content-length:*) cl=${line#*:}; cl=${cl//[[:space:]]/} ;; esac
+  done
+  # The body goes to a file first, so that its length can be compared with the Content-Length: a
+  # connection cut short must not hand over half a file (the checks would catch it, but say so here).
+  tmp=$(mktemp -p "${WORK:-/tmp}") || return 1
+  head -c 1048576 <&3 > "$tmp"     # a certificate file is a few KB; refuse to be filled up
   exec 3<&-
+  n=$(wc -c < "$tmp")
+  if [ -n "$cl" ] && { ! [[ $cl =~ ^[0-9]+$ ]] || [ "$n" != "$cl" ]; }; then
+    echo "body is $n bytes, Content-Length says $cl" >&2; rm -f "$tmp"; return 1
+  fi
+  cat "$tmp"; rm -f "$tmp"
 }
 GET_FN=$(declare -f get)
 
 fetch() {  # name outfile errfile. In the background so a TERM is handled at once; 30 s limit.
   # The Basic auth value is given to this one process only, as an environment variable (not argv).
-  AUTH=$AUTH SRC_HOST=$SRC_HOST SRC_PORT=$SRC_PORT \
+  AUTH=$AUTH SRC_HOST=$SRC_HOST SRC_PORT=$SRC_PORT WORK=$WORK \
     timeout 30 bash -c "$GET_FN"'; get "$1"' _ "$1" > "$2" 2> "$3" &
   child=$!
   wait "$child"
@@ -552,11 +573,12 @@ pull_htpasswd() {
       log "the accounts file from $SRC_HOST:$SRC_PORT was rejected: $why"; continue
     fi
     if cmp -s "$t/htpasswd" "$f"; then rm -rf "$t"; return 1; fi
-    # Rewritten in place (same inode), never replaced by mv: anything that holds the file open or
-    # bind-mounted keeps seeing it. Group and mode are set first, so the content is never readable by others.
-    [ -e "$f" ] || install -m 640 -o root -g $NGINX_GID /dev/null "$f" || { rm -rf "$t"; return 2; }
-    chown root:$NGINX_GID "$f"; chmod 640 "$f"
-    if ! cat "$t/htpasswd" > "$f"; then log "cannot write $f"; rm -rf "$t"; return 2; fi
+    # A temporary file in the same directory, then mv: nginx (which has the directory mounted) never sees
+    # a half-written file. Group and mode are set before the content goes in.
+    if ! { install -m 640 -o root -g $NGINX_GID /dev/null "$DIST/.htpasswd.new" \
+           && cat "$t/htpasswd" > "$DIST/.htpasswd.new" && mv -f "$DIST/.htpasswd.new" "$f"; }; then
+      log "cannot write $f"; rm -f "$DIST/.htpasswd.new"; rm -rf "$t"; return 2
+    fi
     log "updated the site accounts file from $SRC_HOST:$SRC_PORT ($(wc -l < "$f") accounts); FreeRADIUS is not restarted for it"
     rm -rf "$t"; return 0
   done
@@ -599,7 +621,6 @@ if [ "$ROLE" = backup ]; then
     bg sleep "$RETRY"
     pull
   done
-  publish_dist "$LIVE_DIR" || { log "cannot publish the certificate set in $DIST"; exit 1; }
   pull_htpasswd
   [ -s "$DIST/htpasswd" ] || log "WARNING: no site accounts file yet: the sites cannot fetch from this host's certificate service until the primary's /htpasswd is reachable (CERT_DIST_BACKUP_USER on the primary must name this host's account)"
   log "role: BACKUP; sets and site accounts from ${CERT_SYNC_URL//,/, }, checked every ${INTERVAL}s"
@@ -627,15 +648,17 @@ died_early() {
 start_fr
 if died_early; then
   log "FreeRADIUS exited at start ($frc)"
-  # Backup: one fall-back, to the set that was in use before the current one. The primary has none.
-  if [ "$ROLE" = backup ] && [ "$LIVE_FROM" = current ] && [ -d "$CACHE/previous" ] && usable "$CACHE/previous" \
-     && install_set "$CACHE/previous" "$LIVE"; then
+  # Backup: a fall-back to the set that was in use before the current one, but only if the certificate
+  # is plausibly the cause: `freeradius -C` refuses the set now. FreeRADIUS can also die at start for
+  # reasons that have nothing to do with the set (a listen address that is not up yet, a port in use);
+  # rolling back would then hide the real problem, so the container just exits and Docker restarts it.
+  if [ "$ROLE" = backup ] && [ "$LIVE_FROM" = current ] && ! fr_check "$LIVE_DIR" quiet \
+     && [ -d "$CACHE/previous" ] && usable "$CACHE/previous" && install_set "$CACHE/previous" "$LIVE"; then
     LIVE_FROM=previous
     LIVE_DIR=$CACHE/previous
     log "!!! ROLLING BACK: FreeRADIUS would not start on the current certificate set; starting on the PREVIOUS one ($CACHE/previous). Investigate the primary's set."
     start_fr
     if died_early; then log "FreeRADIUS does not start on the previous set either"; exit 1; fi
-    publish_dist "$LIVE_DIR" || log "cannot publish the previous set in $DIST"
   else
     exit "$frc"
   fi
@@ -647,6 +670,11 @@ if [ "$ROLE" = primary ]; then
   exit "$rc"
 fi
 
+# Backup: FreeRADIUS has survived the grace period on this set, so the sites may now be given it.
+if publish_dist "$LIVE_DIR"; then log "published the certificate set to $DIST for cert-dist"
+else log "cannot publish the certificate set in $DIST"; kill -TERM "$fr"; wait "$fr"; exit 1; fi
+
+RETRY_AT=$((SECONDS + RETRY_CURRENT))
 while :; do
   sleep "$INTERVAL" & sp=$!; child=$sp
   who=""
@@ -659,5 +687,16 @@ while :; do
     log "new certificate set from $SRC_HOST:$SRC_PORT, restarting to load it"
     kill -TERM "$fr"; wait "$fr"
     exit 0
+  fi
+  if [ "$LIVE_FROM" = previous ]; then
+    log "WARNING: still running on the PREVIOUS certificate set ($CACHE/previous); the current one is unusable. Check the primary's set."
+    if [ "$SECONDS" -ge "$RETRY_AT" ]; then
+      RETRY_AT=$((SECONDS + RETRY_CURRENT))
+      if usable "$CACHE"; then
+        log "the current certificate set is usable again; restarting to load it"
+        kill -TERM "$fr"; wait "$fr"
+        exit 0
+      fi
+    fi
   fi
 done

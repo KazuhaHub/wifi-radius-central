@@ -36,6 +36,14 @@ LABEL org.opencontainers.image.title="wifi-radius-central" \
 # auth_badpass and auth_goodpass stay off: a password must never reach a log. The build fails
 # if the edit did not apply (the grep counts), so a changed upstream radiusd.conf cannot silently
 # leave the log off.
+# eapol_test (EAP-TTLS client) is added for the handshake test of host/renew-server-cert.sh, which runs it
+# inside this container so that the RADIUS secret never appears on the host's command line.
+RUN set -eux; \
+    apt-get update -qq; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends eapoltest; \
+    rm -rf /var/lib/apt/lists/*; \
+    command -v eapol_test
+
 COPY raddb/ /tmp/central-raddb/
 RUN set -eux; \
     cd /etc/freeradius; \

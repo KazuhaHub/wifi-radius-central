@@ -11,8 +11,9 @@
 # settings as CERT_SYNC_USER, with the printed password as CERT_SYNC_PASSWORD.
 # The password is printed once and stored nowhere here; if it is lost, reset it.
 # Changes take effect at once on the primary (nginx reads the file per request); the backup central node
-# pulls the file within CERT_SYNC_INTERVAL (10 minutes). The file is rewritten in place (same inode): never
-# replace it with sed -i, mv or an editor that does, because anything that has it mounted would keep the old one.
+# pulls the file within CERT_SYNC_INTERVAL (10 minutes). The file is replaced atomically (a temporary file in dist/,
+# then mv), which is safe because cert-dist has the whole dist/ directory mounted, not the file. If you edit it by
+# hand, do the same (never leave it half-written), and keep it root:101, mode 640.
 # This script lives in host/ of the deployment folder (the one with compose.yaml); it finds that folder from its own location.
 set -euo pipefail
 BASE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)   # the deployment folder
@@ -29,11 +30,14 @@ check_name() {
 }
 has() { grep -q "^$1:" "$F"; }
 
-write() {  # new content on stdin -> $F, in place, with a backup of the old content
-  local new; new=$(mktemp); cat > "$new"
+write() {  # new content on stdin -> $F, atomically, with a backup of the old content
+  local new; new=$(mktemp "$BASE/dist/.htpasswd.XXXXXX")
+  trap 'rm -f "$new"' RETURN
+  cat > "$new"
+  chown root:101 "$new"; chmod 640 "$new"
   mkdir -p "$BK"; chmod 700 "$BK"
   cp -p "$F" "$BK/htpasswd.$(date +%Y%m%d-%H%M%S)"
-  cat "$new" > "$F"; rm -f "$new"
+  mv -f "$new" "$F"
   logger -t cert-account "$*"
 }
 

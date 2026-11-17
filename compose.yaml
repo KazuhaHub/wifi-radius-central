@@ -18,13 +18,18 @@ services:
     restart: unless-stopped
     network_mode: host
     env_file: .env
+    # Started after entra-auth. FreeRADIUS does not need it up to start (nothing connects at start; until it
+    # answers, logins get no reply and the sites use the other central server), the order only saves a
+    # few seconds of that.
+    depends_on: [entra-auth]
     volumes:
       # Primary: the certificate set (server.pem, server.key, ca.pem). Backup: not used (leave it empty).
       - ./certs:/certs:ro
       # Backup: verified certificate sets (current and previous), kept across restarts and outages.
       - cert-cache:/var/lib/cert-sync
-      # What cert-dist serves. Primary: ./dist (default; host/publish-site-certs and host/cert-account write it).
-      # Backup: the named volume cert-dist (set CERT_DIST_DIR=cert-dist in .env); the container writes it.
+      # What cert-dist serves, mounted as a directory (files are replaced by rename). Primary: ./dist (default;
+      # host/publish-site-certs and host/cert-account write it). Backup: the named volume cert-dist (set
+      # CERT_DIST_DIR=cert-dist in .env); the container writes it.
       - ${CERT_DIST_DIR:-./dist}:/srv/cert-dist
     logging:
       driver: json-file

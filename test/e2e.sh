@@ -63,6 +63,15 @@ wait_log() {  # container pattern seconds
   done
   return 1
 }
+wait_count() {  # container pattern n seconds: the pattern has appeared at least n times in the log
+  local i c
+  for ((i = 0; i < $4; i++)); do
+    docker logs "$1" > "$T/wl.log" 2>&1; c=$(grep -c -- "$2" "$T/wl.log" || true)
+    [ "$c" -ge "$3" ] && return 0
+    sleep 1
+  done
+  return 1
+}
 logs() { docker logs "$P-fr" 2>&1; }
 # grep -q on a pipe can end the pipeline early (SIGPIPE, which pipefail reports as a failure): read from a file.
 logs_q() { docker logs "$P-fr" > "$T/fr.log" 2>&1; grep -q "$@" "$T/fr.log"; }
@@ -110,7 +119,7 @@ cp "$T/set1/server.pem" "$T/set1/server.key" "$T/hb/certs/"
 printf 'CERT_DIST_BACKUP_USER=e2e-backup\nLISTEN_ADDRS=127.0.0.1\n' > "$T/hb/.env"
 chmod -R a+rX "$T/hb"
 hostrun() {  # command [args]: run one of the host scripts (or any command) as root in the image, on the folder above
-  docker run --rm -e NO_RESTART=1 --entrypoint "$1" -v "$T/hb:/base" "$IMAGE" "${@:2}"
+  docker run --rm -e NO_RESTART=1 -e "CA_SHA256=$CA_FP" --entrypoint "$1" -v "$T/hb:/base" "$IMAGE" "${@:2}"
 }
 setcerts() {  # set-dir: put that set into the primary's certs/ (as the host operator would)
   docker run --rm --entrypoint sh -v "$T/hb:/base" -v "$1:/src:ro" "$IMAGE" -c \
@@ -140,25 +149,42 @@ out=$(hostrun /base/host/cert-account add site-a 2>&1); SA_PW=$(echo "$out" | se
 [ -n "$BK_PW" ] && [ -n "$SA_PW" ] && [ "$(hostrun /base/host/cert-account list | tr '\n' ' ')" = "e2e-backup site-a " ] \
   && ok "cert-account add creates the accounts file and prints each password" || bad "cert-account add / list"
 hostrun /base/host/cert-account add 'Bad_Name' >/dev/null 2>&1 && bad "cert-account accepted a bad name" || ok "cert-account refuses a bad account name"
-ino1=$(hostrun stat -c %i /base/dist/htpasswd)
 hostrun /base/host/cert-account reset site-a >/dev/null 2>&1; hostrun /base/host/cert-account add site-tmp >/dev/null 2>&1
 hostrun /base/host/cert-account del site-tmp >/dev/null 2>&1
 SA_PW=$(hostrun /base/host/cert-account reset site-a 2>&1 | sed -n 's/^password: //p')
-[ "$(hostrun stat -c %i /base/dist/htpasswd)" = "$ino1" ] && [ "$(hostrun /base/host/cert-account list | tr '\n' ' ')" = "e2e-backup site-a " ] \
-  && ok "cert-account reset / del keep the accounts file's inode" || bad "cert-account rewrote the file with a new inode, or the list is wrong"
+[ "$(hostrun stat -c '%a %g' /base/dist/htpasswd)" = "640 101" ] && [ "$(hostrun /base/host/cert-account list | tr '\n' ' ')" = "e2e-backup site-a " ] \
+  && [ -z "$(hostrun sh -c 'ls -A /base/dist | grep htpasswd. || true')" ] \
+  && ok "cert-account reset / del replace the accounts file atomically (640, gid 101, no temporary file left)" || bad "cert-account reset / del: mode, list or a leftover temporary file"
+# publish-site-certs refuses a set whose CA is not the pinned one, and leaves dist/ as it was
+before=$(hostrun cat /base/dist/SHA256SUMS)
+if docker run --rm -e "CA_SHA256=$(printf '%064d' 0)" --entrypoint /base/host/publish-site-certs -v "$T/hb:/base" "$IMAGE" >/dev/null 2>&1; then
+  bad "publish-site-certs published a set whose CA is not the pinned one"
+elif [ "$(hostrun cat /base/dist/SHA256SUMS)" = "$before" ] && [ -z "$(hostrun sh -c 'ls -A /base/dist | grep "^\.[a-z]" || true')" ]; then
+  ok "publish-site-certs refuses a CA that is not the pinned one; dist/ is unchanged and clean"
+else bad "publish-site-certs: dist/ changed or has leftovers after a refusal"; fi
 
 # --- the fake password service, the cert-dist of the primary -----------------------------------------
-printf 'alice:%s\n' "$(openssl passwd -apr1 correct-horse)" > "$T/auth/htpasswd"
+# The fake compares exactly (apr1 hashes of the whole password, read from stdin: no shell or argv quoting).
+SPECIAL='p"q\r%{User-Name}:t'"'"'x$HOME;`id`'          # " \ % { } : ' $ ; ` in one password
+UNI='pässwörd-日本語-ÿ'                                    # non-ASCII (UTF-8)
+LONG=$(printf 'aB3"\\%%:z%.0s' $(seq 16))                  # 128 bytes, the longest RADIUS allows
+ht_line() { printf '%s:%s\n' "$1" "$(printf '%s' "$2" | openssl passwd -apr1 -stdin)"; }
+{ ht_line alice correct-horse; ht_line carol "$SPECIAL"; ht_line frank "$UNI"; ht_line erin "$LONG"; ht_line dave 'x:y'; } > "$T/auth/htpasswd"
+[ "${#LONG}" = 128 ] || { echo "test setup: LONG is ${#LONG} bytes"; exit 1; }
 cat > "$T/auth/nginx.conf" <<EOF
 server {
     listen 127.0.0.1:$AUTH_PORT;
     access_log /dev/stdout;
     if (-f /ctl/down) { return 503; }
+    if (-f /ctl/any200) { return 200; }
+    location = /readyz { return 200; }
     location = /auth {
         auth_basic "fake";
         auth_basic_user_file /etc/nginx/htpasswd;
         try_files /nonexistent =204;     # not "return": that would run before the authentication
     }
+    error_page 401 @e401;               # an empty body, like the real service
+    location @e401 { default_type text/plain; return 401 ""; }
     location / { return 404; }
 }
 EOF
@@ -209,10 +235,11 @@ node() {
   for k in "${!e[@]}"; do [ "${e[$k]}" = "<default>" ] || args+=(-e "$k=${e[$k]}"); done
   docker run -d --name "$P-fr" --network host "${mounts[@]}" "${args[@]}" "${NODE_IMAGE:-$IMAGE}" >/dev/null
 }
-rad() {  # user password [secret] [host-port] [extra docker run args are not used]: accept | reject | none (no reply), via the container
+radq() { local v=$1; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }   # escape \ and " for radclient
+rad() {  # user password [secret]: accept | reject | none (no reply, after RAD_T seconds), via the container
   local r
-  r=$(printf 'User-Name = "%s", User-Password = "%s"' "$1" "$2" \
-    | docker exec -i "$P-fr" radclient -t 15 -r 1 "127.0.0.1:$RAD_PORT" auth "${3:-$LOCAL_SECRET}" 2>&1) || true
+  r=$(printf 'User-Name = "%s", User-Password = "%s"' "$(radq "$1")" "$(radq "$2")" \
+    | docker exec -i "$P-fr" radclient -t "${RAD_T:-15}" -r 1 "127.0.0.1:$RAD_PORT" auth "${3:-$LOCAL_SECRET}" 2>&1) || true
   [ -z "${E2E_DEBUG:-}" ] || echo "rad $1: $r" | sed "s/$LOCAL_SECRET/<secret>/" >&2
   case "$r" in *"Received Access-Accept"*) echo accept ;; *"Received Access-Reject"*) echo reject ;; *) echo none ;; esac
 }
@@ -238,6 +265,11 @@ served_leaf() {  # eapol_test -o writes every received cert (CA first): keep the
     openssl x509 -in "$c" -noout -subject | grep -q "CN *= *radius.kazuha.org" && { echo "$c"; return; }
   done
 }
+status_rad() {  # Status-Server with the local secret: accept | none
+  local r
+  r=$(echo 'Message-Authenticator = 0x00' | docker exec -i "$P-fr" radclient -t "${RAD_T:-15}" -r 1 "127.0.0.1:$RAD_PORT" status "$LOCAL_SECRET" 2>&1 || true)
+  case "$r" in *"Received Access-Accept"*) echo accept ;; *) echo none ;; esac
+}
 serves() {  # server.pem of the set: does the central now present that certificate?
   local leaf
   rm -f "$T/served.pem"
@@ -262,10 +294,16 @@ refused() {  # description pattern [node args...]: the primary must exit non-zer
 }
 
 # --- 2. primary ---------------------------------------------------------------------------------------------
+# The password service is not up yet: FreeRADIUS must start anyway, say nothing meanwhile, and work once it is up.
+docker stop -t 3 "$P-auth" >/dev/null
 node primary
-if wait_log "$P-fr" "Ready to process requests" 40; then ok "primary starts on the set in /certs"
-else bad "primary did not start"; logs | tail -20; exit 1; fi
+if wait_log "$P-fr" "Ready to process requests" 40; then ok "primary starts on the set in /certs although the password service is not up"
+else bad "primary did not start without the password service"; logs | tail -20; exit 1; fi
 logs_q "role: PRIMARY" && ok "role PRIMARY (no CERT_SYNC_URL)" || bad "role not logged as PRIMARY"
+[ "$(RAD_T=5 rad alice correct-horse)" = none ] && ok "password service not up yet: a login gets no reply (the sites fail over)" || bad "a login got a reply while the password service was not up"
+[ "$(RAD_T=5 status_rad)" = none ] && ok "password service not up yet: Status-Server gets no reply (the central looks dead to the sites)" || bad "Status-Server answered while the password service was not up"
+docker start "$P-auth" >/dev/null; sleep 2
+[ "$(rad alice correct-horse)" = accept ] && ok "the password service starts after FreeRADIUS: logins work once it is up" || bad "no login after the password service came up"
 [ "$(rad alice correct-horse)" = accept ] && ok "PAP: correct password accepted" || bad "PAP: correct password not accepted"
 [ "$(rad alice wrong-pass)" = reject ] && ok "PAP: wrong password rejected" || bad "PAP: wrong password not rejected"
 [ "$(rad bob correct-horse)" = reject ] && ok "PAP: unknown user rejected" || bad "PAP: unknown user not rejected"
@@ -288,8 +326,17 @@ if echo "$reach" | grep -q "Received Access-Accept"; then
 else
   echo "SKIP: site-network checks (this host does not deliver packets from the Docker network $NET_SUBNET to $GW)"
 fi
-st=$(echo 'Message-Authenticator = 0x00' | docker exec -i "$P-fr" radclient -t 5 -r 1 "127.0.0.1:$RAD_PORT" status "$LOCAL_SECRET" 2>&1 || true)
-echo "$st" | grep -q "Access-Accept" && ok "Status-Server is answered (the sites' dead-server probe)" || bad "Status-Server not answered: $st"
+[ "$(status_rad)" = accept ] && ok "Status-Server is answered while the password service is ready (the sites' dead-server probe)" || bad "Status-Server not answered"
+# Passwords that are hard for quoting, escaping and Basic auth, through PAP and EAP-TTLS (the fake compares exactly).
+for pair in "carol:$SPECIAL" "frank:$UNI" "erin:$LONG" "dave:x:y"; do
+  u=${pair%%:*}; pw=${pair#*:}
+  [ "$(rad "$u" "$pw")" = accept ] && ok "PAP: $u's password (${#pw} bytes with special characters) accepted" || bad "PAP: $u's special password not accepted"
+  [ "$(rad "$u" "${pw}x")" = reject ] && ok "PAP: $u's password plus one character rejected" || bad "PAP: $u's altered password not rejected"
+  [ "$(eap "$u" "$pw")" = "SUCCESS" ] && ok "EAP-TTLS: $u's special password accepted" || bad "EAP-TTLS: $u's special password not accepted"
+done
+# Basic auth cannot carry ':' in a user name: "dave:x" with "y" would reach the service as dave / "x:y", which is valid
+[ "$(rad 'dave:x' y)" = reject ] && ok "PAP: user name 'dave:x' with password 'y' is rejected, not turned into dave / 'x:y'" || bad "PAP: a user name with ':' was accepted"
+[ "$(eap 'dave:x' y)" = "FAILURE" ] && ok "EAP-TTLS: a user name with ':' is rejected" || bad "EAP-TTLS: a user name with ':' was accepted"
 cfg=$(docker exec "$P-fr" sh -c 'stat -c "%U:%G %a" /etc/freeradius/clients.conf /etc/freeradius/listen.conf' | sort -u)
 [ "$cfg" = "root:freerad 640" ] && ok "generated config is root:freerad 640" || bad "generated config owner/mode: $cfg"
 if docker exec "$P-fr" grep -q 'secret = \$ENV{RADIUS_SECRET_SITES}' /etc/freeradius/clients.conf \
@@ -309,17 +356,25 @@ if logs_q "Login OK: \[alice\]" && logs_q "Login incorrect.*\[alice\]" \
   ok "auth log shows Login OK / Login incorrect, without any password or secret"
 else bad "auth log: missing Login OK / Login incorrect, or a password or secret is in the log"; logs | grep -E "Login|correct-horse" | head -5; fi
 
-# --- 3. the password service is not answering ------------------------------------------------------
+# --- 3. the password service misbehaves or is away --------------------------------------------------
+# Only a 204 accepts. A service failure is not a reject: no reply at all, so that a site's home server
+# times out and fails over to the other central server.
+touch "$T/ctl/any200"
+[ "$(rad alice correct-horse)" = reject ] && [ "$(rad bob whatever)" = reject ] \
+  && ok "the password service answers 200 to everything: every login is rejected (only 204 accepts)" || bad "a 200 from the password service accepted a login"
+[ "$(eap alice correct-horse)" = "FAILURE" ] && ok "EAP-TTLS with 200 from the password service: failure" || bad "EAP-TTLS accepted a 200"
+rm -f "$T/ctl/any200"
 touch "$T/ctl/down"
-[ "$(rad alice correct-horse)" = reject ] && ok "password service answers 503: the login is rejected, not accepted" || bad "503 from the password service: login not rejected"
+[ "$(RAD_T=5 rad alice correct-horse)" = none ] && ok "password service answers 503: no reply to the login (not an accept, not a reject)" || bad "503 from the password service: the login got a reply"
+[ "$(RAD_T=5 status_rad)" = none ] && ok "password service answers 503 on /readyz: no reply to Status-Server" || bad "Status-Server answered while the service was not ready"
 [ "$(eap alice correct-horse)" = "FAILURE" ] && ok "EAP-TTLS with a 503 from the password service: failure" || bad "EAP-TTLS accepted or hung on a 503"
 rm -f "$T/ctl/down"
-[ "$(rad alice correct-horse)" = accept ] && ok "the password service recovers: logins are accepted again" || bad "no recovery after the 503"
+[ "$(rad alice correct-horse)" = accept ] && [ "$(status_rad)" = accept ] && ok "the password service recovers: logins and Status-Server are answered again" || bad "no recovery after the 503"
 docker stop -t 3 "$P-auth" >/dev/null
-t0=$SECONDS; r=$(rad alice correct-horse)
-[ "$r" = reject ] && [ $((SECONDS - t0)) -le 14 ] && ok "password service down: the login is rejected" || bad "password service down: got $r after $((SECONDS - t0)) s"
+t0=$SECONDS; r=$(RAD_T=5 rad alice correct-horse)
+[ "$r" = none ] && [ "$(RAD_T=5 status_rad)" = none ] && ok "password service down (connection refused): no reply to the login or to Status-Server" || bad "password service down: got $r"
 docker start "$P-auth" >/dev/null; sleep 2
-[ "$(rad alice correct-horse)" = accept ] && ok "password service back: logins are accepted again" || bad "no recovery after the service was down"
+[ "$(rad alice correct-horse)" = accept ] && [ "$(status_rad)" = accept ] && ok "password service back: normal again" || bad "no recovery after the service was down"
 stop_quick "$P-fr" && ok "docker stop on the primary is quick and exits 0" || bad "docker stop on the primary was slow or not clean"
 logs_q "Exiting normally" && ok "FreeRADIUS shut down cleanly on TERM" || bad "FreeRADIUS did not log a clean exit"
 docker rm -f "$P-fr" >/dev/null
@@ -358,6 +413,10 @@ else bad "LISTEN_ADDRS policy"; echo "$out"; fi
 out=$(envrun -e LISTEN_ADDRS=192.0.2.1) && rc=0 || rc=$?
 miss=""; for v in SITE_CLIENTS RADIUS_SECRET_SITES RADIUS_SECRET_LOCAL CERT_DIST_LISTEN; do echo "$out" | grep -q "$v" || miss="$miss $v"; done
 [ "$rc" = 1 ] && [ -z "$miss" ] && ok "missing variables: exit 1, each named" || bad "missing variables: rc=$rc, not named:$miss"
+out=$(envrun -e LISTEN_ADDRS=192.0.2.1 -e SITE_CLIENTS=192.0.2.0/24,192.0.2.0/24 -e RADIUS_SECRET_SITES=a -e RADIUS_SECRET_LOCAL=b \
+  -e CERT_DIST_LISTEN=192.0.2.1:11880 -e ENTRA_AUTH_URL=http://192.0.2.9:5002/auth) && rc=0 || rc=$?
+[ "$rc" = 1 ] && echo "$out" | grep -q "SITE_CLIENTS lists an entry twice" && echo "$out" | grep -q "ENTRA_AUTH_URL must be http://127" \
+  && ok "a duplicate SITE_CLIENTS entry and a non-loopback ENTRA_AUTH_URL are refused" || bad "duplicate SITE_CLIENTS / non-loopback ENTRA_AUTH_URL: rc=$rc"
 out=$(envrun "${good[@]}" -e CERT_SYNC_URL=http://203.0.113.1,https://203.0.113.1:80/x,http://192.0.2.1:11880 -e CERT_SYNC_USER=Bad_User -e CERT_SYNC_PASSWORD="p${secret_marker}\$") && rc=0 || rc=$?
 if [ "$rc" = 1 ] && echo "$out" | grep -q "invalid setting: CERT_SYNC_URL: .*203.0.113.1.* is not" && echo "$out" | grep -q "https://203.0.113.1:80/x" \
    && echo "$out" | grep -q "own certificate service" && echo "$out" | grep -q "CERT_SYNC_USER must be" \
@@ -387,9 +446,12 @@ logs_q "role: BACKUP" && ok "role BACKUP (CERT_SYNC_URL set)" || bad "role not l
 if logs_q "cannot get the certificate set from 127.0.0.1:9 " && logs_q "got a new certificate set from 127.0.0.1:$DIST_PORT"; then
   ok "CERT_SYNC_URL fail-over: the first service is down, the set comes from the second"
 else bad "CERT_SYNC_URL fail-over"; logs | grep wifi-radius-central | head -5; fi
+# Nothing is published to cert-dist until FreeRADIUS has survived the grace period on the set (5 s).
+if ! docker exec "$P-fr" test -e /srv/cert-dist/SHA256SUMS; then ok "backup: nothing is published to cert-dist before FreeRADIUS has survived the grace period"
+else bad "backup: the set was published at once, before the grace period"; fi
 [ "$(rad alice correct-horse)" = accept ] && [ "$(eap alice correct-horse)" = SUCCESS ] && serves "$T/set1/server.pem" \
   && ok "backup: PAP and EAP-TTLS login, serving the primary's certificate" || bad "backup: login or certificate"
-sleep 1
+wait_count "$P-fr" "published the certificate set" 1 20 || bad "backup: the set was not published after the grace period"
 if [ "$(docker exec "$P-fr" stat -c '%a %g' /srv/cert-dist/server.pem /srv/cert-dist/server.key /srv/cert-dist/ca.pem /srv/cert-dist/SHA256SUMS /srv/cert-dist/htpasswd | sort -u)" = "640 101" ]; then
   ok "backup publishes the set, SHA256SUMS and htpasswd for cert-dist (640, gid 101)"
 else bad "backup published files: modes"; docker exec "$P-fr" ls -ln /srv/cert-dist; fi
@@ -401,18 +463,16 @@ else bad "backup cert-dist does not serve the primary's set to a site account"; 
 [ "$(http site-a wrong "$BDIST_PORT" SHA256SUMS)" = 401 ] && [ "$(http e2e-backup "$BK_PW" "$BDIST_PORT" htpasswd)" = 403 ] \
   && ok "backup cert-dist: wrong password -> 401, /htpasswd -> 403 for everybody" || bad "backup cert-dist access rules"
 # an accounts-file change alone does not restart FreeRADIUS
-started=$(docker inspect -f '{{.State.StartedAt}}' "$P-fr"); ino=$(docker exec "$P-fr" stat -c %i /srv/cert-dist/htpasswd)
+started=$(docker inspect -f '{{.State.StartedAt}}' "$P-fr")
 SB_PW=$(hostrun /base/host/cert-account add site-b 2>&1 | sed -n 's/^password: //p')
 if wait_log "$P-fr" "updated the site accounts file.*(3 accounts)" 20; then
   sleep 4
   if [ "$(docker inspect -f '{{.State.StartedAt}}' "$P-fr")" = "$started" ] && [ "$(docker inspect -f '{{.RestartCount}}' "$P-fr")" = 0 ] \
-     && [ "$(docker exec "$P-fr" stat -c %i /srv/cert-dist/htpasswd)" = "$ino" ] && ! logs_q "restarting to load it" \
+     && [ "$(docker exec "$P-fr" stat -c '%a %g' /srv/cert-dist/htpasswd)" = "640 101" ] && ! logs_q "restarting to load it" \
+     && [ -z "$(docker exec "$P-fr" sh -c 'ls -A /srv/cert-dist | grep "htpasswd\." || true')" ] \
      && [ "$(http site-b "$SB_PW" "$BDIST_PORT" SHA256SUMS)" = 200 ]; then
-    ok "an accounts-file change alone: rewritten in place (same inode), served at once, FreeRADIUS not restarted"
-  else bad "accounts-file change: restart, new inode, or the new account is not served"
-    logs_q "restarting to load it" && echo "log has: restarting to load it"; logs | grep -n "restart" | head -3
-    docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' "$P-fr"; docker exec "$P-fr" stat -c %i /srv/cert-dist/htpasswd; echo "was: $started $ino"
-    http site-b "$SB_PW" "$BDIST_PORT" SHA256SUMS; fi
+    ok "an accounts-file change alone: replaced atomically (640, gid 101), served at once, FreeRADIUS not restarted"
+  else bad "accounts-file change: restart, mode, a leftover temporary file, or the new account is not served"; fi
 else bad "the backup did not pick up the new account"; logs | tail -5; fi
 # an accounts file that is malformed, or lacks this host's account, is refused
 hostrun sh -c 'echo "Bad_Name:{PLAIN}x" >> /base/dist/htpasswd'
@@ -427,7 +487,7 @@ if [ "$(timeout 60 docker wait "$P-fr")" = "0" ] && logs_q "restarting to load i
 else bad "backup did not exit after a new certificate set"; logs | tail -5; fi
 docker start "$P-fr" >/dev/null
 wait_log "$P-fr" "Ready to process requests" 60 || bad "backup did not restart"
-sleep 1
+wait_count "$P-fr" "published the certificate set" 2 20 || bad "backup: the new set was not published after the restart"
 serves "$RENEWED/server.pem" && ok "after the restart the new certificate is served" || bad "the new certificate is not served"
 if docker exec "$P-fr" test -s /var/lib/cert-sync/previous/server.pem \
    && cmp -s <(docker exec "$P-fr" cat /var/lib/cert-sync/previous/server.pem) "$T/set1/server.pem" \
@@ -440,7 +500,6 @@ else bad "backup: a password or secret appears in the log"; fi
 setcerts "$T/weak"; publish >/dev/null
 if wait_log "$P-fr" "was rejected: FreeRADIUS cannot load it" 25; then ok "backup: a set that passes the checks but that FreeRADIUS refuses is rejected"
 else bad "backup: the FreeRADIUS-refused set was not rejected"; logs | tail -8; fi
-if [ "$(docker inspect -f '{{.State.Running}}' "$P-fr")" = "true" ] && ! logs_q "restarting to load it.*" ; then :; fi
 serves "$RENEWED/server.pem" && ok "backup: the previous set stays live" || bad "backup: the live set changed"
 stop_quick "$P-fr" && ok "backup: docker stop is quick and exits 0" || bad "backup: docker stop was slow or not clean"
 logs_q "Exiting normally" && ok "backup: FreeRADIUS shut down cleanly on TERM" || bad "backup: no clean FreeRADIUS exit"
@@ -472,14 +531,32 @@ seed_cache() {  # CURRENT_DIR PREVIOUS_DIR: fill the (empty) cache volume with a
 }
 docker volume rm "$P-cache" >/dev/null
 seed_cache "$T/weak" "$T/set1"
-node backup "CERT_SYNC_PASSWORD=not-the-password"
+node backup "CERT_SYNC_PASSWORD=not-the-password" CERT_RETRY_CURRENT_INTERVAL=10
 if wait_log "$P-fr" "Ready to process requests" 40 && logs_q "running on the PREVIOUS set" && serves "$T/set1/server.pem"; then
   ok "backup: boot falls back to previous/ when the current cached set is unusable (primary refuses the account)"
 else bad "backup: boot fall-back did not work"; logs | tail -10; fi
+wait_count "$P-fr" "published the certificate set" 1 25 || true
 if [ "$(docker exec "$P-fr" stat -c %a /srv/cert-dist/server.key)" = 640 ] \
    && [ "$(http_body site-a "$SA_PW" "$BDIST_PORT" server.pem | openssl x509 -noout -fingerprint -sha256)" = "$(fp "$T/set1/server.pem")" ]; then
   ok "backup: the set it runs on is the one its cert-dist serves"
 else bad "backup: cert-dist does not serve the live set after a fall-back"; fi
+if wait_count "$P-fr" "WARNING: still running on the PREVIOUS certificate set" 2 20; then ok "backup on previous/: a WARNING is logged at every check interval"
+else bad "backup on previous/: no repeated WARNING"; logs | tail -5; fi
+# the current set becomes usable (here: put a good one in the cache): the next hourly retry (10 s here) restarts onto it
+mkdir -p "$T/seed2"; cp "$T/set1"/{server.pem,server.key,ca.pem} "$T/seed2/"; (cd "$T/seed2" && sha256sum server.pem server.key ca.pem > SHA256SUMS); chmod -R a+rX "$T/seed2"
+docker run --rm --entrypoint sh -v "$P-cache:/c" -v "$T/seed2:/seed:ro" "$IMAGE" -c 'cp /seed/* /c/' >/dev/null
+if [ "$(timeout 40 docker wait "$P-fr" || echo timeout)" = 0 ] && logs_q "the current certificate set is usable again"; then
+  ok "backup on previous/: the current set is retried, and the container restarts onto it once it is usable"
+else bad "backup on previous/: no retry of the current set"; logs | tail -5; fi
+docker rm -f "$P-fr" >/dev/null
+# FreeRADIUS dying at start for a reason that is not the certificate (a listen address that is not up): no roll-back
+docker volume rm "$P-cache" >/dev/null
+seed_cache "$T/set1" "$T/set1"
+node backup "CERT_SYNC_PASSWORD=not-the-password" "LISTEN_ADDRS=127.0.0.1,192.0.2.77"
+code=$(timeout 60 docker wait "$P-fr" || echo timeout)
+if [ "$code" != 0 ] && [ "$code" != timeout ] && logs_q "FreeRADIUS exited at start" && ! logs_q "ROLLING BACK" && ! logs_q "published the certificate set"; then
+  ok "backup: an early death that is not the certificate (unbindable address) exits non-zero: no roll-back, nothing published"
+else bad "backup: early death not handled as expected (exit $code)"; logs | tail -8; fi
 docker rm -f "$P-fr" >/dev/null
 
 echo "e2e: $pass passed, $fail failed"

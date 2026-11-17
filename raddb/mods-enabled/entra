@@ -1,15 +1,24 @@
 # Password check against Microsoft Entra ID, through the entra-forward-auth service (a separate container).
 #
 #   GET $ENV{ENTRA_AUTH_URL}   with HTTP Basic user:password
-#   204 -> ok (Access-Accept)    401 -> reject (wrong password, unknown user, disallowed domain, banned)
-#   503, any other status, no answer, timeout -> fail (the client gets Access-Reject, never an accept)
+#   204 (and only 204)  -> Access-Accept
+#   401, other 4xx, any other 2xx, 3xx -> Access-Reject
+#   503, other 5xx, no answer, timeout, connection refused -> no answer at all (see sites-enabled/default):
+#     the site's home server then times out and fails over to the other central server
 #
-# ENTRA_AUTH_URL is validated and defaulted (http://127.0.0.1:5002/auth) by the entrypoint.
+# rlm_rest itself maps every 2xx to "ok"; the virtual servers therefore also check that the status
+# code is exactly 204 (&reply:REST-HTTP-Status-Code), so a 200 from a misbehaving service is a reject.
+# The module is never used in a way that lets a response body become attributes of an accepted login:
+# an accept needs a 204, which has no body.
+#
+# ENTRA_AUTH_URL is validated and defaulted (http://127.0.0.1:5002/auth, loopback only) by the entrypoint.
 # entra-forward-auth waits up to 8 s for Entra itself, so the request timeout here is longer than that.
 # The password is sent only on the loopback connection to that service and is never logged
 # (the authentication log has auth_badpass and auth_goodpass off).
+#
+# No connect_uri and pool start = 0: nothing connects at start, so FreeRADIUS starts (and answers
+# Status-Server with silence) even when entra-auth is not up yet.
 rest entra {
-	connect_uri = "$ENV{ENTRA_AUTH_URL}"
 	connect_timeout = 2
 
 	authenticate {
@@ -21,14 +30,39 @@ rest entra {
 		timeout = 12
 	}
 
-	# A few connections are enough: a login waits for Entra, and the Wi-Fi login rate is low.
+	# Up to about the size of the thread pool (max_servers = 32): a login waits for Entra, and a
+	# request that finds no free connection would fail.
 	pool {
-		start = 1
-		min = 1
-		max = 8
+		start = 0
+		min = 0
+		max = 32
 		spare = 2
 		uses = 0
-		retry_delay = 5
+		retry_delay = 1
+		lifetime = 0
+		idle_timeout = 60
+	}
+}
+
+# Readiness of entra-auth (GET /readyz), used only to answer Status-Server: a central server whose
+# password service is not ready must not look alive to the sites. ENTRA_READY_URL is derived from
+# ENTRA_AUTH_URL by the entrypoint.
+rest entra_ready {
+	connect_timeout = 1
+
+	authorize {
+		uri = "$ENV{ENTRA_READY_URL}"
+		method = 'get'
+		timeout = 2
+	}
+
+	pool {
+		start = 0
+		min = 0
+		max = 4
+		spare = 1
+		uses = 0
+		retry_delay = 1
 		lifetime = 0
 		idle_timeout = 60
 	}

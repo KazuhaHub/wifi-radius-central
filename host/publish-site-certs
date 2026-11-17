@@ -4,12 +4,21 @@
 # Each site pulls it periodically and restarts its FreeRADIUS when SHA256SUMS changes, so a renewal
 # or CA change only has to be done here. Run after any change in certs/ (renew-server-cert.sh does).
 # PRIMARY host only; this script lives in host/ of the deployment folder (the one with compose.yaml).
+# The set is checked the way the sites and the backup will check it, so a set they would refuse is never published.
 set -eu
 BASE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)   # the deployment folder
 D=$BASE/dist; NAME=radius.kazuha.org
+# The pinned CA: keep this equal to CA_SHA256 in the Dockerfile (a change of CA is a change of both).
+# The environment may override it, for tests only.
+CA_SHA256=${CA_SHA256:-26:DC:20:91:BE:86:84:E5:BA:30:9C:A0:13:00:B2:9B:DC:61:8B:4F:C4:B5:4B:EF:31:25:94:09:D9:E1:04:46}
+want=$(printf '%s' "$CA_SHA256" | tr -d : | tr 'a-f' 'A-F')
 install -d -m 750 -o root -g 101 "$D"    # gid 101 = nginx inside the cert-dist container
 for f in server.pem server.key ca.pem; do install -m 640 -o root -g 101 "$BASE/certs/$f" "$D/.$f.new"; done
-openssl verify -CAfile "$D/.ca.pem.new" "$D/.server.pem.new" >/dev/null
+trap 'rm -f "$D"/.server.pem.new "$D"/.server.key.new "$D"/.ca.pem.new "$D"/.SHA256SUMS.new' EXIT
+[ "$(grep -c -- '-----BEGIN' "$D/.ca.pem.new")" = 1 ] || { echo "publish-site-certs: ca.pem must be exactly one certificate" >&2; exit 1; }
+got=$(openssl x509 -in "$D/.ca.pem.new" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr 'a-f' 'A-F')
+[ "$got" = "$want" ] || { echo "publish-site-certs: ca.pem is not the pinned CA (SHA-256 $got)" >&2; exit 1; }
+openssl verify -no-CApath -no-CAstore -CAfile "$D/.ca.pem.new" "$D/.server.pem.new" >/dev/null
 openssl x509 -in "$D/.server.pem.new" -noout -ext subjectAltName | grep -q "DNS:$NAME"
 [ "$(openssl x509 -in "$D/.server.pem.new" -noout -pubkey | openssl sha256)" = \
   "$(openssl pkey -in "$D/.server.key.new" -pubout | openssl sha256)" ]

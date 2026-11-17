@@ -16,8 +16,28 @@ server inner-tunnel {
 	}
 
 	authenticate {
+		# Only a 204 from entra-auth accepts (rlm_rest alone would accept any 2xx). Everything else, a
+		# failure of the service included, is a reject: an AP that terminates EAP-TTLS here has no
+		# other central server to fail over to (the site proxies send plain PAP to the default server).
+		# The module's actions are set to 1 (carry on) so that the decision is made here, from the HTTP status code.
 		Auth-Type entra {
-			entra
+			entra {
+				ok = 1
+				fail = 1
+				reject = 1
+				invalid = 1
+				notfound = 1
+				userlock = 1
+			}
+			if (&reply:REST-HTTP-Status-Code == 204) {
+				update reply {
+					&REST-HTTP-Status-Code !* ANY
+				}
+				ok
+			}
+			else {
+				reject
+			}
 		}
 	}
 
