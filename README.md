@@ -47,6 +47,10 @@ service failed shows in the FreeRADIUS log as an `entra: ... ERROR` line followe
   answers `GET /readyz` within 2 s; otherwise they get no reply, so a central server that cannot check passwords looks dead
   to the sites and they use the other one. Once the service is back, the sites mark this server alive again after their
   usual number of answered probes.
+- Status-Server is answered only for a 2xx from `/readyz`; a 3xx, 4xx, 5xx or no answer is silence. Response bodies are
+  never decoded into attributes (`force_to = 'plain'`), the decision uses the HTTP status code only, and it insists on exactly
+  one status code and drops any `Response-Packet-Type` first.
+- A PAP request with a password but no (or an empty) user name is rejected, never sent to `entra`.
 - FreeRADIUS does not need `entra-auth` to start (nothing connects at start: the REST pool starts empty and there is no
   pre-connect). Until the service is up, logins and probes get no reply.
 - An empty password and a user name containing `:` (which Basic auth cannot carry) are rejected without asking Entra.

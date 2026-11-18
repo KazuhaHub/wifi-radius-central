@@ -25,6 +25,10 @@ rest entra {
 		uri = "$ENV{ENTRA_AUTH_URL}"
 		method = 'get'
 		auth = 'basic'
+		# A response body is never decoded into attributes of the request (the service answers with a
+		# status code only). The virtual servers also delete Response-Packet-Type and insist on exactly one
+		# REST-HTTP-Status-Code before they decide.
+		force_to = 'plain'
 		username = "%{User-Name}"
 		password = "%{User-Password}"
 		timeout = 12
@@ -53,13 +57,14 @@ rest entra_ready {
 	authorize {
 		uri = "$ENV{ENTRA_READY_URL}"
 		method = 'get'
+		force_to = 'plain'
 		timeout = 2
 	}
 
 	pool {
 		start = 0
 		min = 0
-		max = 4
+		max = 16
 		spare = 1
 		uses = 0
 		retry_delay = 1

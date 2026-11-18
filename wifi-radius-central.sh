@@ -175,7 +175,7 @@ if [[ $ENTRA_AUTH_URL =~ ^http://(127(\.[0-9]+){3}):([0-9]+)(/[A-Za-z0-9._/-]*)$
   { is_ipv4 "$_h" && is_port "$_q"; } || _bad_url=1
 else _bad_url=1; fi
 [ -z "${_bad_url:-}" ] || err "ENTRA_AUTH_URL must be http://127.x.x.x:port/path, a loopback address (optional, default http://127.0.0.1:5002/auth)"
-ENTRA_READY_URL=${ENTRA_AUTH_URL%/*}/readyz   # entra-auth's readiness endpoint, for Status-Server
+ENTRA_READY_URL=http://${_h:-127.0.0.1}:${_q:-5002}/readyz   # entra-auth's readiness endpoint, for Status-Server (scheme://host:port only)
 
 if [ -n "${LISTEN_ADDRS:-}" ]; then
   n_before=${#errors[@]}

@@ -11,13 +11,29 @@ server default {
 		# The Status-Server probes of the site proxies (they use them to detect a dead central server).
 		# Answered only while entra-auth is ready: a central server that cannot check passwords must look
 		# dead, so that the sites send their logins to the other one.
+		# Only a 2xx from /readyz counts (3xx, 4xx, 5xx, no answer: silence). As with `entra` below, the module's
+		# actions are set to 1 so that the decision is made here, from the HTTP status code.
 		Autz-Type Status-Server {
-			entra_ready
-			if (!(ok || updated)) {
-				do_not_respond
+			entra_ready {
+				ok = 1
+				updated = 1
+				reject = 1
+				fail = 1
+				invalid = 1
+				userlock = 1
+				notfound = 1
+			}
+			update control {
+				&Response-Packet-Type !* ANY
+			}
+			if (&reply:REST-HTTP-Status-Code && ("%{reply:REST-HTTP-Status-Code[#]}" == "1") && (&reply:REST-HTTP-Status-Code >= 200) && (&reply:REST-HTTP-Status-Code < 300)) {
+				update reply {
+					&REST-HTTP-Status-Code !* ANY
+				}
+				ok
 			}
 			else {
-				ok
+				do_not_respond
 			}
 		}
 		filter_username
@@ -25,8 +41,10 @@ server default {
 			ok = return
 		}
 		if (&User-Password) {
-			# Basic auth cannot carry a ':' in the user name, and an empty password is never valid.
-			if ((&User-Name =~ /:/) || (&User-Password == "")) {
+			# Basic auth cannot carry a ':' in the user name; an absent or empty user name or an empty password
+			# is never valid. None of these may reach entra: a request that cannot be checked is a reject,
+			# not a reason for the site to try the other central server.
+			if ((!&User-Name) || (&User-Name == "") || (&User-Name =~ /:/) || (&User-Password == "")) {
 				reject
 			}
 			update control {
@@ -53,9 +71,20 @@ server default {
 				notfound = 1
 				userlock = 1
 			}
+			# Nothing the response said may steer the decision: drop any Response-Packet-Type, and insist on
+			# exactly one status code (a second one could only come from a response body).
+			update control {
+				&Response-Packet-Type !* ANY
+			}
+			update reply {
+				&Response-Packet-Type !* ANY
+			}
 			if (!&reply:REST-HTTP-Status-Code || (&reply:REST-HTTP-Status-Code >= 500)) {
 				# The shipped policy: Response-Packet-Type := Do-Not-Respond in the control list, then `handled`.
 				do_not_respond
+			}
+			elsif ("%{reply:REST-HTTP-Status-Code[#]}" != "1") {
+				reject
 			}
 			elsif (&reply:REST-HTTP-Status-Code == 204) {
 				update reply {

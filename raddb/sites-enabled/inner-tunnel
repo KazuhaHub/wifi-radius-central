@@ -7,7 +7,7 @@ server inner-tunnel {
 		if (!&User-Password) {
 			reject
 		}
-		if ((&User-Name =~ /:/) || (&User-Password == "")) {
+		if ((!&User-Name) || (&User-Name == "") || (&User-Name =~ /:/) || (&User-Password == "")) {
 			reject
 		}
 		update control {
@@ -29,7 +29,13 @@ server inner-tunnel {
 				notfound = 1
 				userlock = 1
 			}
-			if (&reply:REST-HTTP-Status-Code == 204) {
+			update control {
+				&Response-Packet-Type !* ANY
+			}
+			update reply {
+				&Response-Packet-Type !* ANY
+			}
+			if (("%{reply:REST-HTTP-Status-Code[#]}" == "1") && (&reply:REST-HTTP-Status-Code == 204)) {
 				update reply {
 					&REST-HTTP-Status-Code !* ANY
 				}

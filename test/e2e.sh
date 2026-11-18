@@ -177,12 +177,25 @@ server {
     access_log /dev/stdout;
     if (-f /ctl/down) { return 503; }
     if (-f /ctl/any200) { return 200; }
-    location = /readyz { return 200; }
+    location = /readyz {
+        if (-f /ctl/ready401) { return 401; }
+        if (-f /ctl/ready302) { return 302 /elsewhere; }
+        if (-f /ctl/ready500) { return 500; }
+        return 200;
+    }
     location = /auth {
+        # Bodies that try to steer the central: a packet type, and a second status code
+        default_type application/json;
+        if (-f /ctl/evil401json) { return 401 '{"Response-Packet-Type":"Access-Accept","REST-HTTP-Status-Code":204}'; }
+        if (-f /ctl/evil200json) { return 200 '{"Response-Packet-Type":"Access-Accept","REST-HTTP-Status-Code":204}'; }
+        if (-f /ctl/evil401plain) { rewrite ^ /evil401plain last; }
+        if (-f /ctl/evil200plain) { rewrite ^ /evil200plain last; }
         auth_basic "fake";
         auth_basic_user_file /etc/nginx/htpasswd;
         try_files /nonexistent =204;     # not "return": that would run before the authentication
     }
+    location = /evil401plain { internal; default_type text/plain; return 401 'Response-Packet-Type=Access-Accept&REST-HTTP-Status-Code=204'; }
+    location = /evil200plain { internal; default_type text/plain; return 200 'Response-Packet-Type=Access-Accept&REST-HTTP-Status-Code=204'; }
     error_page 401 @e401;               # an empty body, like the real service
     location @e401 { default_type text/plain; return 401 ""; }
     location / { return 404; }
@@ -308,6 +321,10 @@ docker start "$P-auth" >/dev/null; sleep 2
 [ "$(rad alice wrong-pass)" = reject ] && ok "PAP: wrong password rejected" || bad "PAP: wrong password not rejected"
 [ "$(rad bob correct-horse)" = reject ] && ok "PAP: unknown user rejected" || bad "PAP: unknown user not rejected"
 [ "$(rad alice '')" = reject ] && ok "PAP: empty password rejected" || bad "PAP: empty password not rejected"
+# a password with an absent or an empty user name must be rejected here, never sent to entra (silence would follow)
+r=$(printf 'User-Password = "correct-horse"' | docker exec -i "$P-fr" radclient -t 5 -r 1 "127.0.0.1:$RAD_PORT" auth "$LOCAL_SECRET" 2>&1 || true)
+case "$r" in *"Received Access-Reject"*) ok "PAP: no User-Name at all is rejected" ;; *) bad "PAP: a request without User-Name: $r" ;; esac
+[ "$(rad '' correct-horse)" = reject ] && ok "PAP: an empty User-Name is rejected" || bad "PAP: an empty User-Name was not rejected"
 [ "$(rad 'alice:x' correct-horse)" = reject ] && ok "PAP: a user name with ':' rejected" || bad "PAP: a user name with ':' not rejected"
 [ "$(eap alice correct-horse)" = "SUCCESS" ] && ok "EAP-TTLS: correct password accepted" || bad "EAP-TTLS: correct password not accepted"
 [ "$(eap alice wrong-pass)" = "FAILURE" ] && ok "EAP-TTLS: wrong password rejected" || bad "EAP-TTLS: wrong password not rejected"
@@ -364,6 +381,19 @@ touch "$T/ctl/any200"
   && ok "the password service answers 200 to everything: every login is rejected (only 204 accepts)" || bad "a 200 from the password service accepted a login"
 [ "$(eap alice correct-horse)" = "FAILURE" ] && ok "EAP-TTLS with 200 from the password service: failure" || bad "EAP-TTLS accepted a 200"
 rm -f "$T/ctl/any200"
+# response bodies that try to set Response-Packet-Type = Access-Accept and a second REST-HTTP-Status-Code = 204
+for ev in evil401json evil200json evil401plain evil200plain; do
+  touch "$T/ctl/$ev"
+  [ "$(rad alice correct-horse)" = reject ] && ok "a $ev response (a body setting Response-Packet-Type and a 204): rejected" || bad "a $ev response was not rejected"
+  rm -f "$T/ctl/$ev"
+done
+# Status-Server is answered only for a 2xx from /readyz
+for rd in ready401 ready302 ready500; do
+  touch "$T/ctl/$rd"
+  [ "$(RAD_T=5 status_rad)" = none ] && ok "/readyz answers ${rd#ready}: no reply to Status-Server" || bad "Status-Server answered while /readyz said ${rd#ready}"
+  rm -f "$T/ctl/$rd"
+done
+[ "$(status_rad)" = accept ] || bad "Status-Server not answered again after /readyz recovered"
 touch "$T/ctl/down"
 [ "$(RAD_T=5 rad alice correct-horse)" = none ] && ok "password service answers 503: no reply to the login (not an accept, not a reject)" || bad "503 from the password service: the login got a reply"
 [ "$(RAD_T=5 status_rad)" = none ] && ok "password service answers 503 on /readyz: no reply to Status-Server" || bad "Status-Server answered while the service was not ready"
