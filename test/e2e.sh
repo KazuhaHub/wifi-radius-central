@@ -229,6 +229,7 @@ LOCAL_SECRET=$(openssl rand -hex 16); SITES_SECRET=$(openssl rand -hex 16)
 # the value <default> removes a variable, so the image's own default applies.
 node() {
   local role=$1; shift
+  # shellcheck disable=SC2054 # the commas are part of the associative-array values, not element separators
   local -A e=(
     [LISTEN_ADDRS]=127.0.0.1,$GW [SITE_CLIENTS]=${NET_SUBNET%.0/24}.0/25 [RADIUS_SECRET_SITES]=$SITES_SECRET
     [RADIUS_SECRET_LOCAL]=$LOCAL_SECRET [LISTEN_PORT]=$RAD_PORT [CA_SHA256]=$CA_FP

@@ -75,10 +75,10 @@ install_cert() {
   if [ -n "${NO_RESTART:-}" ]; then echo "(NO_RESTART set: skipping restart and handshake test)"; return; fi
   # The container reads certs/ at start, so it is restarted. It refuses to start on a set that fails its
   # checks, so wait for "Ready to process requests" and fail loudly if it does not come.
-  local since out i ready=""
+  local since out ready=""
   since=$(date +%s)
   (cd "$BASE" && docker compose restart freeradius >/dev/null)
-  for i in $(seq 30); do
+  for _ in $(seq 30); do
     out=$(cd "$BASE" && docker compose logs --since "$since" freeradius 2>&1 || true)
     if grep -q "Ready to process requests" <<< "$out"; then ready=1; break; fi
     sleep 1
