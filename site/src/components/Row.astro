@@ -1,0 +1,21 @@
+---
+// One line of a settings sheet: field name (zh + the English UI label) and its value.
+interface Props {
+  k: string;          // Chinese field name
+  kEn: string;        // English field name as shown on English-language devices
+  v?: string;         // literal value (shown in monospace, same in both languages)
+  vZh?: string;       // translated value (shown in the body font)
+  vEn?: string;
+  note?: string;      // small hint under the value
+  noteEn?: string;
+  copy?: boolean;     // show a copy button for `v`
+}
+const { k, kEn, v, vZh, vEn, note, noteEn, copy = false } = Astro.props;
+---
+<div class="row">
+  <div class="k"><span lang="zh-CN">{k}</span><span lang="en">{kEn}</span></div>
+  {v
+    ? <div class="v">{v}{note && <small lang="zh-CN">{note}</small>}{noteEn && <small lang="en">{noteEn}</small>}</div>
+    : <div class="v plain"><span lang="zh-CN">{vZh}</span><span lang="en">{vEn}</span>{note && <small lang="zh-CN">{note}</small>}{noteEn && <small lang="en">{noteEn}</small>}</div>}
+  {copy && v ? <button class="copy" type="button" data-copy={v}>复制</button> : <span></span>}
+</div>

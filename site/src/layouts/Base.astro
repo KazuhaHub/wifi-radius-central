@@ -1,0 +1,164 @@
+---
+// Page shell: <head>, pill nav, footer and the small vanilla script for
+// theme, language, device tabs and copy buttons. Inter is self-hosted.
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-500.css";
+import "@fontsource/inter/latin-600.css";
+import "@fontsource/inter/latin-700.css";
+import "../styles/hub.css";
+
+interface Props { title: string; description: string }
+const { title, description } = Astro.props;
+---
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#e9e7e2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0d11" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="/images/HeadPicture.png" />
+    <link rel="apple-touch-icon" href="/images/HeadPicture.png" />
+    <script is:inline>
+      (function () {
+        var r = document.documentElement;
+        try {
+          var t = localStorage.getItem("kh-theme");
+          if (t === "light" || t === "dark") r.setAttribute("data-theme", t);
+        } catch (e) {}
+        var l = null;
+        try { l = localStorage.getItem("kh-lang"); } catch (e) {}
+        if (l !== "zh" && l !== "en") {
+          var sys = (navigator.languages && navigator.languages[0]) || navigator.language || "zh";
+          l = /^zh/i.test(sys) ? "zh" : "en";
+        }
+        if (l === "en") { r.setAttribute("data-lang", "en"); r.lang = "en"; }
+      })();
+    </script>
+  </head>
+  <body class="nojs">
+    <Fragment set:html="<!--email_off-->" />
+    <div class="app">
+      <nav class="nav" aria-label="主导航 Primary">
+        <a class="brand" href="/" aria-label="Kazuha Hub">
+          <img class="logo-light" src="/images/logo-title-circle.png" alt="Kazuha Hub" width="78" height="34" />
+          <img class="logo-dark" src="/images/logo-title-circle-darkmode.png" alt="Kazuha Hub" width="78" height="34" />
+          <span class="brand-sub"><span lang="zh-CN">无线网络</span><span lang="en">Wi-Fi</span></span>
+        </a>
+        <div class="nav-actions">
+          <button class="icon-btn" id="lang-btn" type="button" aria-label="Switch language / 切换语言"><span lang="zh-CN">EN</span><span lang="en">中文</span></button>
+          <button class="icon-btn" id="theme-btn" type="button" aria-label="切换深浅色 / Toggle theme">
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </button>
+        </div>
+      </nav>
+
+      <slot />
+
+      <footer class="foot">
+        <span>© 2026 Kazuha Hub</span>
+        <span><span lang="zh-CN">遇到问题请联系 </span><span lang="en">Need help? Email </span><a href="mailto:it@kazuha.org">it@kazuha.org</a></span>
+      </footer>
+    </div>
+
+    <Fragment set:html="<!--/email_off-->" />
+    <script is:inline>
+      (function () {
+        var d = document, root = d.documentElement, body = d.body;
+        body.classList.remove("nojs"); body.classList.add("js");
+        function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+        function en() { return root.getAttribute("data-lang") === "en"; }
+        var titles = { zh: "Kazuha Hub 无线网络 · 连接指南", en: "Kazuha Hub Wi-Fi · Setup guide" };
+
+        function setLang(l) {
+          root.setAttribute("data-lang", l); root.lang = l === "en" ? "en" : "zh-CN";
+          d.title = titles[l];
+          d.querySelectorAll(".copy:not(.done)").forEach(function (b) { b.textContent = l === "en" ? "Copy" : "复制"; });
+        }
+        setLang(en() ? "en" : "zh");
+        d.getElementById("lang-btn").addEventListener("click", function () {
+          var l = en() ? "zh" : "en"; save("kh-lang", l); setLang(l);
+        });
+
+        d.getElementById("theme-btn").addEventListener("click", function () {
+          var cur = root.getAttribute("data-theme") ||
+            (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          var next = cur === "dark" ? "light" : "dark";
+          root.setAttribute("data-theme", next); save("kh-theme", next);
+        });
+
+        var tabs = [].slice.call(d.querySelectorAll('[role="tab"]'));
+        function select(id, focus) {
+          tabs.forEach(function (t) {
+            var on = t.id === "t-" + id;
+            t.setAttribute("aria-selected", on ? "true" : "false"); t.tabIndex = on ? 0 : -1;
+            d.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+            if (on && focus) t.focus();
+          });
+        }
+        tabs.forEach(function (t, i) {
+          t.addEventListener("click", function () { var id = t.id.slice(2); select(id); history.replaceState(null, "", "#" + id); });
+          t.addEventListener("keydown", function (e) {
+            var n = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+            if (!n) return; e.preventDefault();
+            select(tabs[(i + n + tabs.length) % tabs.length].id.slice(2), true);
+          });
+        });
+        var ua = navigator.userAgent, guess = "apple";
+        if (/Android/i.test(ua)) guess = "android";
+        else if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) guess = "apple";
+        else if (/Macintosh/.test(ua)) guess = "mac";
+        else if (/Windows/.test(ua)) guess = "windows";
+        else if (/Linux|X11|CrOS/.test(ua)) guess = "linux";
+        function fromHash() { var h = location.hash.slice(1); return d.getElementById("t-" + h) ? h : null; }
+        if (tabs.length) select(fromHash() || guess);
+        addEventListener("hashchange", function () {
+          var h = fromHash(); if (h) { select(h); d.getElementById("setup").scrollIntoView(); }
+        });
+
+
+        var still = matchMedia("(prefers-reduced-motion: reduce)");
+        d.querySelectorAll("details").forEach(function (det) {
+          var sum = det.querySelector("summary");
+          sum.addEventListener("click", function (e) {
+            if (still.matches || !det.animate) return;
+            e.preventDefault();
+            if (det.getAttribute("data-busy")) return;
+            det.setAttribute("data-busy", "1");
+            var from = det.offsetHeight, opening = !det.open;
+            if (opening) det.open = true;
+            var to = opening ? det.offsetHeight : sum.offsetHeight + (det.offsetHeight - det.clientHeight);
+            det.style.overflow = "hidden";
+            var a = det.animate([{ height: from + "px" }, { height: to + "px" }], { duration: 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+            var finished = false;
+            function done() {
+              if (finished) return; finished = true;
+              try { a.cancel(); } catch (x) {}
+              if (!opening) det.open = false;
+              det.style.overflow = ""; det.removeAttribute("data-busy");
+            }
+            a.onfinish = a.oncancel = done;
+            setTimeout(done, 320); // background tabs may never fire onfinish
+
+          });
+        });
+        d.querySelectorAll(".copy").forEach(function (b) {
+          b.addEventListener("click", function () {
+            var v = b.getAttribute("data-copy") || "";
+            function ok() {
+              b.classList.add("done"); b.textContent = en() ? "Copied" : "已复制";
+              setTimeout(function () { b.classList.remove("done"); b.textContent = en() ? "Copy" : "复制"; }, 1600);
+            }
+            if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(v).then(ok, function () {}); return; }
+            var ta = d.createElement("textarea"); ta.value = v; ta.style.position = "fixed"; ta.style.opacity = "0";
+            body.appendChild(ta); ta.select(); try { d.execCommand("copy"); ok(); } catch (e) {} body.removeChild(ta);
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

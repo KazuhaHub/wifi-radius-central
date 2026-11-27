@@ -1,0 +1,277 @@
+---
+import Base from "../layouts/Base.astro";
+import Row from "../components/Row.astro";
+import Download from "../components/Download.astro";
+
+// Keep in sync with the host notes in /opt/wifi-radius-central/README.md.
+const server = "radius.kazuha.org";
+const profile = "/Kazuha-Hub-WiFi.mobileconfig";
+const caCert = "/kazuha-hub-wifi-ca.crt";
+const anon = "anonymous@kazuha.org";
+---
+<Base title="Kazuha Hub 无线网络 · 连接指南" description="Kazuha Hub 企业 Wi-Fi 的连接方法：iPhone、iPad、Mac、Android、Windows 和 Linux。">
+  <main class="grid">
+    <!-- Setup -->
+    <section class="card span-4" id="setup">
+      <div class="setup-head">
+        <div>
+          <h1 class="section-title" style="margin-top:0"><span lang="zh-CN">连接 Kazuha Hub</span><span lang="en">Connect to Kazuha Hub</span></h1>
+          <p class="card-desc" lang="zh-CN">网络 <b>Kazuha Hub</b> · 用户名是完整账号（包括 @ 后面的部分，如 <span class="mono">name@kazuha.org</span>）· 密码是账号密码</p>
+          <p class="card-desc" lang="en">Network <b>Kazuha Hub</b> · username is your full account, including the part after @ (e.g. <span class="mono">name@kazuha.org</span>) · your account password</p>
+        </div>
+        <div class="os-tabs" role="tablist" aria-label="设备 Device">
+          <button class="os-tab" role="tab" id="t-apple" aria-controls="p-apple" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>iPhone · iPad</button>
+          <button class="os-tab" role="tab" id="t-mac" aria-controls="p-mac" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>Mac</button>
+          <button class="os-tab" role="tab" id="t-android" aria-controls="p-android" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>Android</button>
+          <button class="os-tab" role="tab" id="t-windows" aria-controls="p-windows" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Windows</button>
+          <button class="os-tab" role="tab" id="t-linux" aria-controls="p-linux" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>Linux</button>
+        </div>
+      </div>
+
+      <!-- iPhone / iPad -->
+      <div class="panel" role="tabpanel" id="p-apple" aria-labelledby="t-apple">
+        <div class="pane">
+          <div class="pane-head"><h3>iPhone · iPad</h3><span class="badge">iOS / iPadOS 15+</span></div>
+          <p class="pane-intro" lang="zh-CN">装一个描述文件，网络和证书会一起设好。</p>
+          <p class="pane-intro" lang="en">One configuration profile sets up both the network and the certificate.</p>
+          <ol class="steps">
+            <li>
+              <div lang="zh-CN">用 <b>Safari</b> 打开本页，点下面的按钮，弹窗里选<b>允许</b>。</div>
+              <div lang="en">Open this page in <b>Safari</b>, tap the button below and choose <b>Allow</b>.</div>
+              <Download href={profile} zh="下载描述文件" en="Download profile" />
+            </li>
+            <li lang="zh-CN">打开<b>设置</b>，点最上面的<b>已下载描述文件</b>（或 <span class="path">通用<i>›</i>VPN 与设备管理</span>），选 <b>Kazuha Hub Wi-Fi</b>，点<b>安装</b>并输入锁屏密码。</li>
+            <li lang="en">Open <b>Settings</b> and tap <b>Profile Downloaded</b> near the top (or <span class="path">General<i>›</i>VPN &amp; Device Management</span>). Choose <b>Kazuha Hub Wi-Fi</b>, tap <b>Install</b> and enter your passcode.</li>
+            <li lang="zh-CN">输入<b>用户名</b>（完整账号）和<b>密码</b>，点<b>完成</b>。几秒后就会连上 Kazuha Hub。</li>
+            <li lang="en">Enter your <b>username</b> (full account) and <b>password</b>, then tap <b>Done</b>. It joins Kazuha Hub within a few seconds.</li>
+          </ol>
+          <div class="callout warn">
+            <p lang="zh-CN"><b>显示“未验证”就先别装</b>，发邮件到 <a href="mailto:it@kazuha.org">it@kazuha.org</a>。</p>
+            <p lang="en"><b>If it says Not Verified, don't install it.</b> Email <a href="mailto:it@kazuha.org">it@kazuha.org</a>.</p>
+          </div>
+          <div class="callout">
+            <p lang="zh-CN">以前手动连过 Kazuha Hub 的话，先在 <span class="path">设置<i>›</i>无线局域网</span> 里点 ⓘ，选<b>忽略此网络</b>，再装描述文件。</p>
+            <p lang="en">If you joined Kazuha Hub by hand before, tap ⓘ next to it in <span class="path">Settings<i>›</i>Wi-Fi</span> and choose <b>Forget This Network</b> first.</p>
+          </div>
+        </div>
+        <div class="pane">
+          <p class="sheet-title"><span lang="zh-CN">需要填写</span><span lang="en">You'll be asked for</span></p>
+          <div class="sheet">
+            <Row k="用户名" kEn="Username" v="name@kazuha.org" note="完整账号，@ 后面也要写" noteEn="your full account, including the part after @" />
+            <Row k="密码" kEn="Password" vZh="账号密码" vEn="Your account password" />
+          </div>
+          <p class="side-note" lang="zh-CN">只在安装时输入一次，之后会自动连接。改了账号密码以后，需要在 Wi-Fi 设置里重新输入。</p>
+          <p class="side-note" lang="en">You enter them once while installing; after that it connects automatically. After a password change, enter the new one in Wi-Fi settings.</p>
+        </div>
+      </div>
+
+      <!-- Mac -->
+      <div class="panel" role="tabpanel" id="p-mac" aria-labelledby="t-mac" hidden>
+        <div class="pane">
+          <div class="pane-head"><h3>Mac</h3><span class="badge">macOS 12+</span></div>
+          <p class="pane-intro" lang="zh-CN">装一个描述文件，网络和证书会一起设好。</p>
+          <p class="pane-intro" lang="en">One configuration profile sets up both the network and the certificate.</p>
+          <ol class="steps">
+            <li>
+              <div lang="zh-CN">下载描述文件，在“下载”文件夹里双击它。</div>
+              <div lang="en">Download the profile and double-click it in Downloads.</div>
+              <Download href={profile} zh="下载描述文件" en="Download profile" />
+            </li>
+            <li lang="zh-CN">打开 <span class="path">系统设置<i>›</i>通用<i>›</i>设备管理</span>（macOS 13–14 在 <span class="path">隐私与安全性<i>›</i>描述文件</span>），双击 <b>Kazuha Hub Wi-Fi</b>，点<b>安装</b>，输入 Mac 登录密码。</li>
+            <li lang="en">Open <span class="path">System Settings<i>›</i>General<i>›</i>Device Management</span> (macOS 13–14: <span class="path">Privacy &amp; Security<i>›</i>Profiles</span>), double-click <b>Kazuha Hub Wi-Fi</b>, click <b>Install</b> and enter your Mac password.</li>
+            <li lang="zh-CN">输入用户名（完整账号）和密码，Mac 会自动连上。</li>
+            <li lang="en">Enter your username (full account) and password. The Mac joins on its own.</li>
+          </ol>
+          <div class="callout warn">
+            <p lang="zh-CN"><b>显示“未验证”就先别装</b>，发邮件到 <a href="mailto:it@kazuha.org">it@kazuha.org</a>。</p>
+            <p lang="en"><b>If it says Not Verified, don't install it.</b> Email <a href="mailto:it@kazuha.org">it@kazuha.org</a>.</p>
+          </div>
+          <div class="callout">
+            <p lang="zh-CN">以前手动连过的话，先在 <span class="path">系统设置<i>›</i>无线局域网</span> 里点 Kazuha Hub 旁的 <b>···</b>，选<b>忽略此网络</b>。</p>
+            <p lang="en">If you joined it by hand before, click <b>···</b> next to Kazuha Hub in <span class="path">System Settings<i>›</i>Wi-Fi</span> and choose <b>Forget This Network</b>.</p>
+          </div>
+        </div>
+        <div class="pane">
+          <p class="sheet-title"><span lang="zh-CN">需要填写</span><span lang="en">You'll be asked for</span></p>
+          <div class="sheet">
+            <Row k="用户名" kEn="Username" v="name@kazuha.org" note="完整账号，@ 后面也要写" noteEn="your full account, including the part after @" />
+            <Row k="密码" kEn="Password" vZh="账号密码" vEn="Your account password" />
+          </div>
+          <p class="side-note" lang="zh-CN">只在安装时输入一次，之后会自动连接。改了账号密码以后，需要在 Wi-Fi 设置里重新输入。</p>
+          <p class="side-note" lang="en">You enter them once while installing; after that it connects automatically. After a password change, enter the new one in Wi-Fi settings.</p>
+        </div>
+      </div>
+
+      <!-- Android -->
+      <div class="panel" role="tabpanel" id="p-android" aria-labelledby="t-android" hidden>
+        <div class="pane">
+          <div class="pane-head"><h3>Android</h3><span class="badge">Android 13+</span></div>
+          <p class="pane-intro" lang="zh-CN">不用装任何东西，直接在 Wi-Fi 设置里连。</p>
+          <p class="pane-intro" lang="en">Nothing to install; connect straight from Wi-Fi settings.</p>
+          <ol class="steps">
+            <li lang="zh-CN">在 Wi-Fi 列表里点 <b>Kazuha Hub</b>，按“需要填写”里的内容填好，点<b>连接</b>。</li>
+            <li lang="en">Tap <b>Kazuha Hub</b> in the Wi-Fi list, fill in the fields as shown and tap <b>Connect</b>.</li>
+            <li lang="zh-CN">第一次会弹出服务器证书，名称是 <span class="mono">{server}</span> 就点<b>信任</b>。之后会自动连上，不会再问。</li>
+            <li lang="en">The first time, the phone shows the server certificate. If the name is <span class="mono">{server}</span>, tap <b>Trust</b>. After that it joins automatically.</li>
+          </ol>
+          <div class="callout warn">
+            <p lang="zh-CN"><b>阶段 2 一定要选 PAP。</b>默认的 MSCHAPV2 会一直“正在连接”。</p>
+            <p lang="en"><b>Phase 2 must be PAP.</b> The default MSCHAPV2 sits on “Connecting” forever.</p>
+          </div>
+          <details class="more">
+            <summary><span lang="zh-CN">没有“首次使用时信任”？</span><span lang="en">No “Trust on First Use” option?</span></summary>
+            <div>
+              <p lang="zh-CN">Android 12 及更早没有这一项，CA 证书选<b>不验证</b>，其他照填，一样能连。安全性会差一些。</p>
+              <p lang="en">Android 12 and earlier don't have it. Choose <b>Do not validate</b> and fill in the rest. This works, but the phone won't check the server, which is less secure.</p>
+            </div>
+          </details>
+        </div>
+        <div class="pane">
+          <p class="sheet-title"><span lang="zh-CN">需要填写</span><span lang="en">Fill in</span></p>
+          <div class="sheet">
+            <Row k="EAP 方法" kEn="EAP method" v="TTLS" />
+            <Row k="阶段 2 身份验证" kEn="Phase 2 authentication" v="PAP" />
+            <Row k="CA 证书" kEn="CA certificate" vZh="首次使用时信任" vEn="Trust on First Use" />
+            <Row k="身份" kEn="Identity" v="name@kazuha.org" note="换成你的完整账号，@ 后面也要写" noteEn="your own full account, including the part after @" />
+            <Row k="匿名身份" kEn="Anonymous identity" v={anon} note="选填，账号名不会明文发出" noteEn="optional; hides your username on the air" copy />
+            <Row k="密码" kEn="Password" vZh="账号密码" vEn="Your account password" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Windows -->
+      <div class="panel" role="tabpanel" id="p-windows" aria-labelledby="t-windows" hidden>
+        <div class="pane">
+          <div class="pane-head"><h3>Windows</h3><span class="badge">Windows 10+</span></div>
+          <p class="pane-intro" lang="zh-CN">不用装任何东西，直接在 Wi-Fi 列表里连，输入账号密码就行。</p>
+          <p class="pane-intro" lang="en">Nothing to install; connect from the Wi-Fi list and enter your account and password.</p>
+          <ol class="steps">
+            <li lang="zh-CN">点任务栏右下角的网络图标，在 Wi-Fi 列表里选 <b>Kazuha Hub</b>，勾选<b>自动连接</b>，点<b>连接</b>。</li>
+            <li lang="en">Click the network icon at the bottom right of the taskbar, choose <b>Kazuha Hub</b> in the Wi-Fi list, tick <b>Connect automatically</b> and click <b>Connect</b>.</li>
+            <li lang="zh-CN">输入用户名（完整账号）和密码，点<b>确定</b>。</li>
+            <li lang="en">Enter your username (full account) and password, then click <b>OK</b>.</li>
+            <li lang="zh-CN">提示“是否继续连接？”时，确认证书名称是 <span class="mono">{server}</span>，再点<b>连接</b>。之后会自动连上，不会再问。</li>
+            <li lang="en">If asked “Continue connecting?”, check the certificate name is <span class="mono">{server}</span>, then click <b>Connect</b>. After that it joins automatically.</li>
+          </ol>
+          <details class="more">
+            <summary><span lang="zh-CN">连不上？手动添加网络</span><span lang="en">Doesn't connect? Add the network by hand</span></summary>
+            <div>
+              <p lang="zh-CN">打开 <span class="path">设置<i>›</i>网络和 Internet<i>›</i>WLAN<i>›</i>管理已知网络</span>，以前连过 Kazuha Hub 的话先<b>忘记</b>。然后点<b>添加网络</b>，按下面填好，勾选<b>自动连接</b>，点<b>保存</b>，再连接并输入账号密码。</p>
+              <p lang="en">Open <span class="path">Settings<i>›</i>Network &amp; internet<i>›</i>Wi-Fi<i>›</i>Manage known networks</span> and forget Kazuha Hub if it's listed. Click <b>Add network</b>, fill in the fields below, tick <b>Connect automatically</b> and click <b>Save</b>, then connect and enter your account and password.</p>
+              <div class="sheet">
+                <Row k="网络名" kEn="Network name" v="Kazuha Hub" copy />
+                <Row k="安全类型" kEn="Security type" vZh="WPA2-企业 AES" vEn="WPA2-Enterprise AES" note="列表里显示 WPA3 的话选 WPA3-企业" noteEn="choose WPA3-Enterprise if the network shows WPA3" />
+                <Row k="EAP 方法" kEn="EAP method" v="EAP-TTLS" />
+                <Row k="身份验证方法" kEn="Authentication method" vZh="未加密的密码 (PAP)" vEn="Unencrypted password (PAP)" />
+                <Row k="隐私" kEn="Privacy" v={anon} copy />
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="pane">
+          <p class="sheet-title"><span lang="zh-CN">需要填写</span><span lang="en">You'll be asked for</span></p>
+          <div class="sheet">
+            <Row k="用户名" kEn="Username" v="name@kazuha.org" note="完整账号，@ 后面也要写" noteEn="your full account, including the part after @" />
+            <Row k="密码" kEn="Password" vZh="账号密码" vEn="Your account password" />
+          </div>
+          <p class="side-note" lang="zh-CN">只在第一次连接时输入，之后会自动连接。改了账号密码以后，需要重新输入。</p>
+          <p class="side-note" lang="en">You enter them the first time; after that it connects automatically. After a password change, enter the new one.</p>
+        </div>
+      </div>
+
+      <!-- Linux -->
+      <div class="panel" role="tabpanel" id="p-linux" aria-labelledby="t-linux" hidden>
+        <div class="pane">
+          <div class="pane-head"><h3>Linux</h3><span class="badge">NetworkManager</span></div>
+          <p class="pane-intro" lang="zh-CN">Ubuntu、Fedora、Debian 等使用 NetworkManager 的发行版，不用下载任何东西。</p>
+          <p class="pane-intro" lang="en">Ubuntu, Fedora, Debian and other NetworkManager distributions. Nothing to download.</p>
+          <ol class="steps">
+            <li lang="zh-CN">在 Wi-Fi 设置里点 <b>Kazuha Hub</b>，按“需要填写”里的内容填好，点<b>连接</b>。</li>
+            <li lang="en">Click <b>Kazuha Hub</b> in Wi-Fi settings, fill in the fields as shown and click <b>Connect</b>.</li>
+            <li lang="zh-CN">之后会自动连上，不会再问。</li>
+            <li lang="en">From then on it connects automatically.</li>
+          </ol>
+          <details class="more">
+            <summary><span lang="zh-CN">想更安全：使用 CA 证书</span><span lang="en">More secure: use the CA certificate</span></summary>
+            <div>
+              <p lang="zh-CN">下载 CA 证书放到固定位置（如 <code>~/.config/</code>），CA 证书一栏选它，域填 <code>{server}</code>。这样只会连真正的 Kazuha Hub 服务器。</p>
+              <p lang="en">Download the CA certificate, keep it somewhere permanent (e.g. <code>~/.config/</code>), select it as the CA certificate and set Domain to <code>{server}</code>. The device then only talks to the real Kazuha Hub server.</p>
+              <Download href={caCert} zh="下载 CA 证书" en="Download CA certificate" variant="ghost" />
+              <p lang="zh-CN" style="margin-top:10px">命令行（把账号换成你的，密码在连接时输入）：</p>
+              <p lang="en" style="margin-top:10px">From the command line (use your own account; you're asked for the password when connecting):</p>
+<pre class="code"><code><span class="tk-fn">nmcli</span> connection add <span class="tk-key">type</span> wifi <span class="tk-key">con-name</span> <span class="tk-str">"Kazuha Hub"</span> <span class="tk-key">ssid</span> <span class="tk-str">"Kazuha Hub"</span> <span class="tk-esc">\</span>
+  <span class="tk-key">wifi-sec.key-mgmt</span> wpa-eap <span class="tk-key">802-1x.eap</span> ttls <span class="tk-key">802-1x.phase2-auth</span> pap <span class="tk-esc">\</span>
+  <span class="tk-key">802-1x.ca-cert</span> ~/.config/kazuha-hub-wifi-ca.crt <span class="tk-esc">\</span>
+  <span class="tk-key">802-1x.domain-suffix-match</span> {server} <span class="tk-esc">\</span>
+  <span class="tk-key">802-1x.identity</span> name@kazuha.org <span class="tk-key">802-1x.password-flags</span> <span class="tk-num">2</span>
+
+<span class="tk-fn">nmcli</span> connection up <span class="tk-str">"Kazuha Hub"</span> <span class="tk-flag">--ask</span></code></pre>
+            </div>
+          </details>
+        </div>
+        <div class="pane">
+          <p class="sheet-title"><span lang="zh-CN">需要填写</span><span lang="en">Fill in</span></p>
+          <div class="sheet">
+            <Row k="安全" kEn="Security" vZh="WPA 及 WPA2 企业" vEn="WPA & WPA2 Enterprise" note="较新版本也可选 WPA3 企业" noteEn="or WPA3 Enterprise on newer versions" />
+            <Row k="认证" kEn="Authentication" vZh="隧道 TLS (TTLS)" vEn="Tunneled TLS (TTLS)" />
+            <Row k="CA 证书" kEn="CA certificate" vZh="勾选“不需要 CA 证书”" vEn="Tick “No CA certificate is required”" />
+            <Row k="内部认证" kEn="Inner authentication" v="PAP" />
+            <Row k="用户名" kEn="Username" v="name@kazuha.org" note="完整账号，@ 后面也要写" noteEn="full account, including the part after @" />
+            <Row k="密码" kEn="Password" vZh="账号密码" vEn="Your account password" />
+          </div>
+          <p class="side-note" lang="zh-CN">匿名身份和域可以留空。</p>
+          <p class="side-note" lang="en">Anonymous identity and Domain can be left empty.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Troubleshooting -->
+    <section class="card span-4" id="help">
+      <h2 class="section-title" style="margin-top:0"><span lang="zh-CN">连不上时</span><span lang="en">Troubleshooting</span></h2>
+      <div class="faq">
+        <details>
+          <summary><span lang="zh-CN">一直“正在连接”，或提示密码错误</span><span lang="en">Stuck on “Connecting”, or password rejected</span></summary>
+          <div lang="zh-CN">
+            <p>先查三件事：用户名是不是<b>完整账号</b>（包括 @ 后面的部分）；Android / Linux（以及手动添加网络的 Windows）的内层认证是不是 <b>PAP</b>；最近有没有改过密码。</p>
+            <p>都没问题的话，用同一个账号登录其他 Kazuha Hub 服务试试。那边能登录、Wi-Fi 不行，多半是账号还没开通 Wi-Fi，发邮件到 <a href="mailto:it@kazuha.org">it@kazuha.org</a>。</p>
+          </div>
+          <div lang="en">
+            <p>Check three things: the username is your <b>full account</b> (including the part after @); on Android and Linux (and Windows, if you added the network by hand) the inner method is <b>PAP</b>; and whether you changed your password recently.</p>
+            <p>If all that is right, try signing in to another Kazuha Hub service with the same account. If that works but Wi-Fi doesn't, your account probably isn't enabled for Wi-Fi yet. Email <a href="mailto:it@kazuha.org">it@kazuha.org</a>.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span lang="zh-CN">试了几次后，对的密码也不行了</span><span lang="en">After a few tries even the right password fails</span></summary>
+          <div lang="zh-CN"><p>连续输错密码，Kazuha Hub 账号（SSO）会被暂时锁定。停下来等 15 分钟左右，确认好密码再试，别让设备反复重连。</p></div>
+          <div lang="en"><p>Repeated wrong passwords temporarily lock your Kazuha Hub account (SSO). Wait about 15 minutes, check the password, then try once more. Don't leave the device retrying.</p></div>
+        </details>
+        <details>
+          <summary><span lang="zh-CN">列表里看不到 Kazuha Hub</span><span lang="en">Kazuha Hub isn't in the list</span></summary>
+          <div lang="zh-CN"><p>有些地点只提供 5 GHz，只支持 2.4 GHz 的老设备看不到它。也可能只是离得太远，换个位置刷新一下。</p></div>
+          <div lang="en"><p>Some locations only offer 5 GHz, which older 2.4 GHz-only devices can't see. You may also just be too far away; move closer and refresh.</p></div>
+        </details>
+        <details>
+          <summary><span lang="zh-CN">改了账号密码以后连不上</span><span lang="en">It stopped working after a password change</span></summary>
+          <div lang="zh-CN"><p>Wi-Fi 也要换成新密码。在设备的 Wi-Fi 设置里改；iPhone、iPad 和 Mac 也可以删掉描述文件重新安装。</p></div>
+          <div lang="en"><p>Wi-Fi needs the new password too. Update it in Wi-Fi settings; on iPhone, iPad and Mac you can also remove the profile and install it again.</p></div>
+        </details>
+        <details>
+          <summary><span lang="zh-CN">提示证书不受信任</span><span lang="en">Warned the certificate isn't trusted</span></summary>
+          <div lang="zh-CN"><p>证书名称是 <span class="mono">{server}</span> 才继续；不是的话<b>不要信任</b>，可能是冒充的热点，请发邮件到 <a href="mailto:it@kazuha.org">it@kazuha.org</a>。</p></div>
+          <div lang="en"><p>Continue only if the certificate name is <span class="mono">{server}</span>. If not, <b>don't trust it</b>: it may be a fake hotspot. Email <a href="mailto:it@kazuha.org">it@kazuha.org</a>.</p></div>
+        </details>
+        <details id="privacy">
+          <summary><span lang="zh-CN">密码会被保存吗？</span><span lang="en">Is my password stored?</span></summary>
+          <div lang="zh-CN"><p>不会。密码在加密隧道里送到认证服务器，向 Kazuha Hub 统一身份认证（SSO）核对一次后就丢掉，不保存、不写日志，路由器也看不到。</p></div>
+          <div lang="en"><p>No. It travels through an encrypted tunnel to the authentication server, is checked once against Kazuha Hub single sign-on (SSO) and then discarded. It isn't stored or logged, and the access point never sees it.</p></div>
+        </details>
+        <details>
+          <summary><span lang="zh-CN">朋友来访能用吗？</span><span lang="en">Can visitors use it?</span></summary>
+          <div lang="zh-CN"><p>Kazuha Hub 只给有账号的人用，请不要把账号借给别人。访客请问现场的人要访客网络。</p></div>
+          <div lang="en"><p>Kazuha Hub is for account holders only; please don't lend your account. Visitors should ask on site for the guest network.</p></div>
+        </details>
+      </div>
+    </section>
+
+  </main>
+</Base>
