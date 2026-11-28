@@ -10,10 +10,15 @@ name: Image
 # amd64 and arm64 and pushed by digest only (no tag yet); the test pulls the amd64 variant of
 # exactly that digest; only if it passes are the tags 3.2, latest and sha-<short> put on that same
 # digest, which is then signed and attested. The arm64 variant is built but not run in CI.
+#
+# site/ (the wireless.kazuha.org guide) is not in the image: a push to main that only changes site/ does not
+# publish. Pull requests still run the test, because "build and end-to-end test" is a required check.
 on:
   pull_request:
   push:
     branches: [main]
+    paths-ignore:
+      - "site/**"
   workflow_dispatch:
 
 permissions:
